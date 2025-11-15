@@ -1,0 +1,32 @@
+{
+  "name": "@securecomm/crypto-sdk",
+  "version": "0.1.0",
+  "description": "SecureComm cryptographic SDK wrapping X3DH and Double Ratchet primitives.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "^0.7.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@types/node": "^22.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.3.0",
+    "@typescript-eslint/parser": "^8.3.0",
+    "eslint": "^9.9.0",
+    "tsup": "^8.2.4",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.3.0",
+    "vitest": "^2.0.5"
+  }
+}
