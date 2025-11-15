@@ -1,0 +1,16 @@
+{
+  "name": "securecomm-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SecureComm monorepo containing crypto SDK, Electron client, and FastAPI backend.",
+  "scripts": {
+    "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces",
+    "format": "npm run format --workspaces",
+    "ci": "npm run lint && npm run test"
+  },
+  "workspaces": [
+    "packages/crypto-sdk",
+    "apps/client-electron"
+  ]
+}
