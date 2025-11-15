@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { cryptoProvider } from '@securecomm/crypto-sdk';
+import { cryptoProvider } from '../../../packages/crypto-sdk/src';
 
 const placeholderChats: Array<{ id: string; name: string }> = [];
 

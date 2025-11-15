@@ -6,7 +6,7 @@ export default defineConfig({
     plugins: [react()],
     resolve: {
         alias: {
-            '@securecomm/crypto-sdk': path.resolve(__dirname, '../packages/crypto-sdk/src')
+            '@securecomm/crypto-sdk': path.resolve(__dirname, '../../packages/crypto-sdk/src')
         }
     },
     build: {
