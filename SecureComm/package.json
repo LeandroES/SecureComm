@@ -12,5 +12,8 @@
   "workspaces": [
     "packages/crypto-sdk",
     "apps/client-electron"
-  ]
+  ],
+  "dependencies": {
+    "libsodium-wrappers": "^0.7.15"
+  }
 }
