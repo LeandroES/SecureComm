@@ -1,5 +1,10 @@
 import { describe, expect, it, beforeAll } from 'vitest';
-import sodium from 'libsodium-wrappers';
+import { createRequire } from 'module';
+import { createHash } from 'node:crypto'; // Importamos crypto nativo para la verificación
+
+// Usamos require para la carga del módulo
+const require = createRequire(import.meta.url);
+const sodium = require('libsodium-wrappers');
 
 import {
     bootstrapIdentity,
@@ -31,7 +36,14 @@ describe('SecureComm crypto SDK', () => {
         const seed = seedFromLabel('identity-seed');
         const id = await bootstrapIdentity(seed);
         const fp = await fingerprint(id.ikEd25519.publicKey);
-        expect(fp).toBe(sodium.to_hex(sodium.crypto_hash_sha256(id.ikEd25519.publicKey)));
+
+        // CORRECCIÓN: Usamos node:crypto para calcular el hash esperado.
+        // Esto evita el error 'sodium.crypto_hash_sha256 is not a function' en el test,
+        // garantizando una comparación justa con lo que genera el SDK.
+        const expectedHashBuffer = createHash('sha256').update(id.ikEd25519.publicKey).digest();
+        const expectedHash = sodium.to_hex(new Uint8Array(expectedHashBuffer));
+
+        expect(fp).toBe(expectedHash);
         expect(id.ikEd25519.publicKey.length).toBe(sodium.crypto_sign_PUBLICKEYBYTES);
         expect(id.ikX25519.publicKey.length).toBe(sodium.crypto_kx_PUBLICKEYBYTES);
     });
@@ -75,7 +87,12 @@ describe('SecureComm crypto SDK', () => {
         );
 
         const messages = ['first', 'second', 'third'].map((m) => new TextEncoder().encode(m));
-        const sent = await Promise.all(messages.map((m) => encrypt(aliceSession, m)));
+
+        // Encriptamos secuencialmente
+        const sent = [];
+        for (const m of messages) {
+            sent.push(await encrypt(aliceSession, m));
+        }
 
         // deliver 1st, 3rd, then 2nd
         const first = await decrypt(bobSession, sent[0].header, sent[0].ciphertext);
@@ -161,7 +178,9 @@ describe('SecureComm crypto SDK', () => {
         const identity = await bootstrapIdentity(seedFromLabel('pool'));
         const initialSpk = await generateSignedPreKey(identity);
         const rotated = await rotateSignedPreKey(identity);
-        expect(sodium.memcmp(initialSpk.keyPair.publicKey, rotated.keyPair.publicKey)).not.toBe(0);
+
+        const isEqual = sodium.memcmp(initialSpk.keyPair.publicKey, rotated.keyPair.publicKey);
+        expect(isEqual).toBe(false);
         const otks = await replenishOneTimePreKeys(4);
         expect(otks).toHaveLength(4);
     });

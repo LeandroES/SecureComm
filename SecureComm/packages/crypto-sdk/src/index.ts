@@ -1,4 +1,5 @@
-import * as sodium from 'libsodium-wrappers';
+import sodium from 'libsodium-wrappers';
+import { createHash } from 'node:crypto'; // Fallback nativo para estabilidad
 
 // --- Type Definitions ---
 
@@ -80,29 +81,27 @@ async function getSodium(): Promise<any> {
 
     await sodium.ready;
 
-    // Capability Check: Find the object that actually has 'crypto_hash_sha256'
-    // This handles cases where 'sodium' is the module namespace, the default export,
-    // or a doubly-wrapped default export (common in CJS/ESM interop).
+    // Intentamos resolver la instancia correcta manejando exportaciones default/named
     const candidates = [
         sodium,
         (sodium as any).default,
-        (sodium as any).sodium,
+        (sodium as any).sodium
     ];
 
-    for (const candidate of candidates) {
-        // Check for the specific function that was failing in tests
-        if (candidate && typeof candidate.crypto_hash_sha256 === 'function') {
-            sodiumInstance = candidate;
+    for (const c of candidates) {
+        // Buscamos 'crypto_generichash' como indicador de carga exitosa
+        // (ya que crypto_hash_sha256 ha demostrado ser problemática en detección)
+        if (c && typeof c.crypto_generichash === 'function') {
+            sodiumInstance = c;
             return sodiumInstance;
         }
     }
 
-    // Fallback: Use the main import if specific search fails (shouldn't happen if loaded correctly)
     sodiumInstance = sodium;
     return sodiumInstance;
 }
 
-// Synchronous getter for use in atomic operations (encrypt)
+// Getter síncrono para operaciones atómicas (encrypt)
 function getSodiumSync(): any {
     if (!sodiumInstance) throw new Error("Sodium not initialized. Call bootstrapIdentity or init first.");
     return sodiumInstance;
@@ -165,10 +164,18 @@ export async function bootstrapIdentity(seed: Uint8Array): Promise<Identity> {
 
 export async function fingerprint(publicKey: Uint8Array): Promise<string> {
     const s = await getSodium();
-    // TS-ignore/cast to any is required because standard @types/libsodium-wrappers
-    // often misses crypto_hash_sha256, even though it exists at runtime.
-    const hash = (s as any).crypto_hash_sha256(publicKey);
-    return s.to_hex(hash);
+
+    // Solución Robusta:
+    // Intentamos usar libsodium. Si falla (por problemas de importación en test),
+    // usamos Node.js crypto nativo. El resultado SHA-256 es estándar e idéntico.
+    if (typeof s.crypto_hash_sha256 === 'function') {
+        const hash = s.crypto_hash_sha256(publicKey);
+        return s.to_hex(hash);
+    } else {
+        // Fallback seguro usando la librería estándar de Node
+        const hashNode = createHash('sha256').update(publicKey).digest();
+        return s.to_hex(new Uint8Array(hashNode));
+    }
 }
 
 // --- Key Management ---
@@ -335,6 +342,7 @@ export async function establishSessionAsResponder(
 
 export function serializeHeader(header: Header): Uint8Array {
     const s = sodiumInstance || sodium;
+    // @ts-ignore
     const json = JSON.stringify({
         d: (s as any).to_base64(header.dh),
         n: header.n,
