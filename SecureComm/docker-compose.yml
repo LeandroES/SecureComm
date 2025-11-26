@@ -36,6 +36,8 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://securecomm:securecomm@postgres:5432/securecomm}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       postgres:
         condition: service_healthy

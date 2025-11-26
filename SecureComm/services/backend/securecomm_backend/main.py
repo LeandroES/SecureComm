@@ -1,13 +1,22 @@
+from collections.abc import AsyncGenerator
+
 from fastapi import Depends, FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router as api_router
-from .api.websocket import echo_websocket
+from .api.websocket import messaging_socket
 from .core.config import Settings, get_settings
+from .dependencies import get_db_session, get_redis, init_models
 
 settings = get_settings()
 
-app = FastAPI(title="SecureComm Backend", version=settings.version)
+
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    await init_models()
+    yield
+
+
+app = FastAPI(title="SecureComm Backend", version=settings.version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,9 +28,11 @@ app.add_middleware(
 app.include_router(api_router)
 
 
-@app.websocket("/ws/echo")
+@app.websocket("/ws/secure")
 async def websocket_endpoint(
-        websocket: WebSocket,
-        settings: Settings = Depends(get_settings),
-) -> None:
-    await echo_websocket(websocket, settings)
+    websocket: WebSocket,
+    settings: Settings = Depends(get_settings),
+    session=Depends(get_db_session),
+):
+    redis = get_redis(settings)
+    await messaging_socket(websocket, settings, session, redis)

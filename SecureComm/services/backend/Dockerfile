@@ -11,6 +11,11 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml setup.cfg ./
 COPY securecomm_backend ./securecomm_backend
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY start.sh ./start.sh
+
+RUN chmod +x start.sh
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -35,4 +40,4 @@ COPY pyproject.toml setup.cfg ./
 USER app
 EXPOSE 8000
 
-CMD ["gunicorn", "securecomm_backend.main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--log-level", "info"]
+CMD ["./start.sh","gunicorn", "securecomm_backend.main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--log-level", "info"]
