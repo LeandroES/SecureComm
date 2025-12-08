@@ -37,6 +37,10 @@ COPY --from=builder /opt/venv /opt/venv
 COPY securecomm_backend ./securecomm_backend
 COPY pyproject.toml setup.cfg ./
 
+COPY --from=builder /app/alembic.ini ./
+COPY --from=builder /app/alembic ./alembic
+COPY --from=builder /app/start.sh ./
+
 USER app
 EXPOSE 8000
 

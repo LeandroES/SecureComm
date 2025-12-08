@@ -1,5 +1,5 @@
 import sodium from 'libsodium-wrappers';
-import { createHash } from 'node:crypto'; // Fallback nativo para estabilidad
+//import { createHash } from 'node:crypto'; // Fallback nativo para estabilidad
 
 // --- Type Definitions ---
 
@@ -161,7 +161,7 @@ export async function bootstrapIdentity(seed: Uint8Array): Promise<Identity> {
         ikX25519: { publicKey: x25519Pk, privateKey: x25519Sk }
     };
 }
-
+/*// Fingerprint using SHA-256
 export async function fingerprint(publicKey: Uint8Array): Promise<string> {
     const s = await getSodium();
 
@@ -176,6 +176,14 @@ export async function fingerprint(publicKey: Uint8Array): Promise<string> {
         const hashNode = createHash('sha256').update(publicKey).digest();
         return s.to_hex(new Uint8Array(hashNode));
     }
+}*/
+
+export async function fingerprint(publicKey: Uint8Array): Promise<string> {
+    const s = await getSodium();
+    // Usamos directamente libsodium, ya que en el navegador siempre estará disponible
+    // tras el await getSodium().
+    const hash = s.crypto_hash_sha256(publicKey);
+    return s.to_hex(hash);
 }
 
 // --- Key Management ---
