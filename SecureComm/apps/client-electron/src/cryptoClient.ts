@@ -67,7 +67,7 @@ export function storeIdentity(id: Identity) {
     const payload: StoredIdentity = {
         ikEd25519: toBase64(id.ikEd25519.publicKey),
         ikX25519: toBase64(id.ikX25519.publicKey),
-        ikSecret: toBase64(id.ikEd25519.secretKey),
+        ikSecret: toBase64(id.ikEd25519.privateKey),
     };
     localStorage.setItem('securecomm.identity', JSON.stringify(payload));
 }
@@ -80,11 +80,11 @@ export function loadIdentity(): Identity | null {
         return {
             ikEd25519: {
                 publicKey: fromBase64(parsed.ikEd25519),
-                secretKey: fromBase64(parsed.ikSecret),
+                privateKey: fromBase64(parsed.ikSecret),
             },
             ikX25519: {
                 publicKey: fromBase64(parsed.ikX25519),
-                secretKey: sodium.crypto_sign_ed25519_sk_to_curve25519(fromBase64(parsed.ikSecret)),
+                privateKey: sodium.crypto_sign_ed25519_sk_to_curve25519(fromBase64(parsed.ikSecret)),
             },
         };
     } catch (err) {

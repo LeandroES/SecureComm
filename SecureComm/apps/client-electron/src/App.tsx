@@ -127,6 +127,17 @@ export default function App() {
             const identity = await ensureIdentity();
             const { spk, otks } = await generateBundle(identity, DEFAULT_OTKS);
             const newDeviceId = crypto.randomUUID();
+
+            // --- DEBUG LOGS ---
+            console.log('DEBUG Identity:', identity);
+            console.log('DEBUG SPK:', spk);
+            console.log('DEBUG OTKS[0]:', otks[0]);
+
+            if (!identity.ikX25519.publicKey) console.error('Falta identity.ikX25519.publicKey');
+            if (!spk.keyPair?.publicKey) console.error('Falta spk.keyPair.publicKey');
+            if (otks.some(k => !k.keyPair?.publicKey)) console.error('Falta publicKey en alguna OTK');
+            // ------------------
+
             const payload = {
                 username,
                 password,
@@ -134,7 +145,7 @@ export default function App() {
                 sig_pub: toBase64(identity.ikEd25519.publicKey),
                 spk_pub: toBase64(spk.keyPair.publicKey),
                 spk_sig: toBase64(spk.signature),
-                otk_pubs: otks.map((k) => toBase64(k.publicKey)),
+                otk_pubs: otks.map((k) => toBase64(k.keyPair.publicKey)),
                 device_id: newDeviceId,
             };
             const res = await register(payload);
@@ -223,7 +234,8 @@ export default function App() {
         await rotatePreKeys(deviceId, token, {
             spk_pub: toBase64(spk.keyPair.publicKey),
             spk_sig: toBase64(spk.signature),
-            otk_pubs: otks.map((k) => toBase64(k.publicKey)),
+            // ERROR WAS HERE TOO:
+            otk_pubs: otks.map((k) => toBase64(k.keyPair.publicKey)),
         });
         appendLog('Rotación de pre-keys completada');
     }
