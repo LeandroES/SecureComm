@@ -133,6 +133,7 @@ async def fetch_bundle(username: str, session: DbDep) -> BundleResponse:
     return BundleResponse(
         username=user.username,
         ik_pub=user.ik_pub,
+        sig_pub=device.sig_pub,
         spk_pub=spk.spk_pub,
         spk_sig=spk.spk_sig,
         otk_pub=otk_pub,

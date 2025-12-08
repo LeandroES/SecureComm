@@ -62,6 +62,7 @@ class TokenResponse(BaseModel):
 class BundleResponse(BaseModel):
     username: str
     ik_pub: str
+    sig_pub: str
     spk_pub: str
     spk_sig: str
     otk_pub: str | None = None

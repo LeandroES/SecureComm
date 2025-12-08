@@ -203,12 +203,19 @@ export default function App() {
         try {
             const bundle: BundleResponse = pendingBundle.bundle;
             const peerBundle = {
-                ikEd25519: fromBase64(bundle.sig_pub),
-                ikX25519: fromBase64(bundle.ik_pub),
-                signedPreKey: fromBase64(bundle.spk_pub),
-                signedPreKeySignature: fromBase64(bundle.spk_sig),
-                oneTimePreKey: bundle.otk_pub ? fromBase64(bundle.otk_pub) : undefined,
+                identityKey: fromBase64(bundle.ik_pub),        // Clave X25519
+                identityKeyEd25519: fromBase64(bundle.sig_pub), // Clave Ed25519 (Firma)
+                signedPreKey: {
+                    id: 0, // El backend actual no devuelve IDs, usamos 0 por defecto
+                    publicKey: fromBase64(bundle.spk_pub),
+                    signature: fromBase64(bundle.spk_sig),
+                },
+                oneTimePreKey: bundle.otk_pub ? {
+                    id: 0, // Usamos 0 por defecto
+                    publicKey: fromBase64(bundle.otk_pub)
+                } : undefined,
             };
+
             const { session } = await initiatorSession(identity, peerBundle);
             setSessions((prev) => ({ ...prev, [bundle.username]: session }));
             setChats((prev) => ({
