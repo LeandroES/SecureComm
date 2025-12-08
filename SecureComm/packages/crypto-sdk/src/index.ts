@@ -91,13 +91,14 @@ async function getSodium(): Promise<any> {
     for (const c of candidates) {
         // Buscamos 'crypto_generichash' como indicador de carga exitosa
         // (ya que crypto_hash_sha256 ha demostrado ser problemática en detección)
-        if (c && typeof c.crypto_generichash === 'function') {
+        if (c && typeof c.crypto_generichash === 'function' && typeof c.crypto_hash_sha256 === 'function') {
             sodiumInstance = c;
             return sodiumInstance;
         }
     }
 
-    sodiumInstance = sodium;
+    // Si ninguno cumple con todo, usamos el que tenga al menos generichash o el default
+    sodiumInstance = candidates.find(c => c && typeof c.crypto_generichash === 'function') || sodium;
     return sodiumInstance;
 }
 
@@ -183,10 +184,18 @@ export async function fingerprint(publicKey: Uint8Array): Promise<string> {
 
 export async function fingerprint(publicKey: Uint8Array): Promise<string> {
     const s = await getSodium();
-    // Usamos directamente libsodium, ya que en el navegador siempre estará disponible
-    // tras el await getSodium().
-    const hash = s.crypto_hash_sha256(publicKey);
-    return s.to_hex(hash);
+
+    // Intentamos SHA-256 (estándar). Si falla, usamos Generic Hash (BLAKE2b)
+    if (typeof s.crypto_hash_sha256 === 'function') {
+        const hash = s.crypto_hash_sha256(publicKey);
+        return s.to_hex(hash);
+    } else if (typeof s.crypto_generichash === 'function') {
+        // Fallback seguro: BLAKE2b de 32 bytes (muy seguro)
+        const hash = s.crypto_generichash(32, publicKey);
+        return s.to_hex(hash);
+    } else {
+        throw new Error('Libsodium hash function not found');
+    }
 }
 
 // --- Key Management ---
