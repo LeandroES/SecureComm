@@ -39,12 +39,28 @@ export async function initCrypto() {
     await sodium.ready;
 }
 
-export function toBase64(data: Uint8Array) {
-    return Buffer.from(data).toString('base64');
+export function toBase64(data: Uint8Array): string {
+    // Usamos sodium si está listo, es más seguro y rápido
+    if (sodium && sodium.to_base64) {
+        return sodium.to_base64(data, sodium.base64_variants.ORIGINAL);
+    }
+    // Fallback estándar del navegador
+    const binary = String.fromCharCode(...data);
+    return btoa(binary);
 }
 
-export function fromBase64(data: string) {
-    return Uint8Array.from(Buffer.from(data, 'base64'));
+export function fromBase64(data: string): Uint8Array {
+    // Usamos sodium si está listo
+    if (sodium && sodium.from_base64) {
+        return sodium.from_base64(data, sodium.base64_variants.ORIGINAL);
+    }
+    // Fallback estándar del navegador
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
 }
 
 export function storeIdentity(id: Identity) {
@@ -78,7 +94,8 @@ export function loadIdentity(): Identity | null {
 }
 
 export async function createIdentity(seed?: Uint8Array) {
-    const identity = await bootstrapIdentity(seed);
+    const finalSeed = seed || sodium.randombytes_buf(32);
+    const identity = await bootstrapIdentity(finalSeed);
     storeIdentity(identity);
     return identity;
 }

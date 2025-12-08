@@ -1,3 +1,8 @@
+import { Buffer } from 'buffer';
+
+// @ts-ignore
+window.Buffer = Buffer; // Inyectar Buffer globalmente para el navegador
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
