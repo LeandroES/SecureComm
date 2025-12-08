@@ -94,8 +94,12 @@ export function loadIdentity(): Identity | null {
 }
 
 export async function createIdentity(seed?: Uint8Array) {
-    const finalSeed = seed || sodium.randombytes_buf(32);
-    const identity = await bootstrapIdentity(finalSeed);
+
+    await sodium.ready;
+    // Si no hay semilla, generamos una aleatoria de 32 bytes
+    const validSeed = seed || sodium.randombytes_buf(32);
+
+    const identity = await bootstrapIdentity(validSeed);
     storeIdentity(identity);
     return identity;
 }

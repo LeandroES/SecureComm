@@ -152,7 +152,6 @@ async function kdfChain(chainKey: Uint8Array): Promise<[Uint8Array, Uint8Array]>
 export async function bootstrapIdentity(seed?: Uint8Array): Promise<Identity> { // Nota el '?' en seed
     const s = await getSodium();
 
-    // Si no hay semilla, generamos una aleatoria de 32 bytes
     const validSeed = seed || s.randombytes_buf(32);
 
     const edKey = s.crypto_sign_seed_keypair(validSeed);

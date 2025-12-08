@@ -4,12 +4,12 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-ARG VITE_API_BASE_URL="https://localhost/api"
-ARG VITE_WS_URL="wss://localhost/ws/secure"
+#ARG VITE_API_BASE_URL="https://localhost/api"
+#ARG VITE_WS_URL="wss://localhost/ws/secure"
 ARG VITE_ROTATION_INTERVAL_MINUTES=30
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
-    VITE_WS_URL=$VITE_WS_URL \
-    VITE_ROTATION_INTERVAL_MINUTES=$VITE_ROTATION_INTERVAL_MINUTES
+#ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
+#    VITE_WS_URL=$VITE_WS_URL \
+ENV    VITE_ROTATION_INTERVAL_MINUTES=$VITE_ROTATION_INTERVAL_MINUTES
 
 COPY package.json tsconfig.base.json ./
 COPY packages/crypto-sdk/package.json packages/crypto-sdk/
