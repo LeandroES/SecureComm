@@ -1,5 +1,6 @@
-#!/usr/bin/env sh
-set -euo pipefail
+#!/bin/sh
+
+set -eu
 
 alembic upgrade head || true
 
