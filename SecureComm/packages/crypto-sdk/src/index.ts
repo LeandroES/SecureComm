@@ -41,7 +41,7 @@ export type SessionHeader = {
     dh: Uint8Array;
     pn: number;
     n: number;
-    // Agregamos soporte oficial para X3DH en el header
+    // NUEVO: Campo vital para el handshake
     x3dh?: {
         otk?: string;
     };
@@ -375,15 +375,15 @@ async function ratchet(session: SessionState, header: SessionHeader) {
     session.n.send = 0;
 }
 
-// --- Serialization Helpers ---
+// --- Serialization Helpers (CORRECCIÓN CRÍTICA APLICADA) ---
 
 export function serializeHeader(header: SessionHeader): Uint8Array {
-    // Usamos 'x' para x3dh para ahorrar espacio
     const obj: any = {
         d: sodium.to_base64(header.dh),
         n: header.n,
         p: header.pn
     };
+    // AQUÍ ESTABA EL ERROR: Ahora incluimos x3dh
     if (header.x3dh) {
         obj.x = header.x3dh;
     }
@@ -399,6 +399,7 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
         n: parsed.n,
         pn: parsed.p
     };
+    // Y lo recuperamos aquí
     if (parsed.x) {
         header.x3dh = parsed.x;
     }
