@@ -89,7 +89,9 @@ function concat(...arrays: Uint8Array[]): Uint8Array {
 }
 
 function hkdf(inputKeyMaterial: Uint8Array, salt: Uint8Array, info: string, length: number): Uint8Array {
-    const ctx = sodium.crypto_generichash(64, concat(inputKeyMaterial, new TextEncoder().encode(info)), salt);
+    // FIX: Asegurar compatibilidad de tipos con JSDOM
+    const infoBytes = new Uint8Array(sodium.from_string(info));
+    const ctx = sodium.crypto_generichash(64, concat(inputKeyMaterial, infoBytes), salt);
     return ctx.slice(0, length);
 }
 
@@ -406,7 +408,8 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
     const json = typeof data === 'string' ? data : sodium.to_string(data);
     const parsed = JSON.parse(json);
     const header: SessionHeader = {
-        dh: sodium.from_base64(parsed.d, sodium.base64_variants.URLSAFE_NO_PADDING),
+        // FIX: Envolver en new Uint8Array para que la comparación memcmp no falle
+        dh: new Uint8Array(sodium.from_base64(parsed.d, sodium.base64_variants.URLSAFE_NO_PADDING)),
         n: parsed.n,
         p: parsed.p
     };
