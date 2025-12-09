@@ -49,11 +49,14 @@ export async function initCrypto() {
 }
 
 export function toBase64(data: Uint8Array): string {
-    return sodium.to_base64(data, sodium.base64_variants.ORIGINAL);
+    // FIX: Usar URLSAFE_NO_PADDING para coincidir con el nuevo estándar del SDK
+    return sodium.to_base64(data, sodium.base64_variants.URLSAFE_NO_PADDING);
 }
 
 export function fromBase64(data: string): Uint8Array {
-    return sodium.from_base64(data, sodium.base64_variants.ORIGINAL);
+    // FIX: Usar URLSAFE_NO_PADDING para el formato
+    // FIX TEST: Envolver en new Uint8Array() para que JSDOM/Vitest reconozcan el tipo
+    return new Uint8Array(sodium.from_base64(data, sodium.base64_variants.URLSAFE_NO_PADDING));
 }
 
 // --- Identity Management ---
@@ -91,7 +94,11 @@ export async function createIdentity(seed?: Uint8Array) {
     await sodium.ready;
     const id = await bootstrapIdentity(seed);
     storeIdentity(id);
-    return id;
+
+    // FIX: Devolver la identidad recargada desde el storage.
+    // Esto asegura que las llaves pasen por el "lavado" de fromBase64
+    // y sean 100% compatibles con los tests y el resto de la app.
+    return loadIdentity()!;
 }
 
 // --- Local Key Management ---
@@ -169,34 +176,97 @@ export async function initiatorSession(identity: Identity, peer: PreKeyBundle) {
 
 export async function autoResponderSession(
     identity: Identity,
-    peerIdentity: { ikEd25519: Uint8Array; ikX25519: Uint8Array; ephPubKey: Uint8Array; oneTimePreKey?: Uint8Array }
+    handshake: {
+        ikX25519: Uint8Array;
+        ikEd25519: Uint8Array;
+        ephPubKey: Uint8Array;
+        oneTimePreKey?: Uint8Array;
+    }
 ) {
-    const keys = loadLocalKeys();
-    if (!keys) throw new Error("No local pre-keys found! Cannot establish session.");
-
-    const { session, usedOneTime } = await establishSessionAsResponder(
-        identity,
-        keys.spk,
-        keys.otks,
-        peerIdentity
-    );
-
-    if (usedOneTime) {
-        const remainingOtks = keys.otks.filter(k => toBase64(k.keyPair.publicKey) !== toBase64(usedOneTime));
-        storeLocalKeys(keys.spk, remainingOtks);
+    // FIX: Cargar las llaves PRIVADAS del almacenamiento local
+    // (Antes fallaba porque intentábamos usar la llave pública del mensaje)
+    const storedKeysJson = localStorage.getItem('securecomm.keys');
+    if (!storedKeysJson) {
+        throw new Error("No se encontraron llaves privadas (securecomm.keys) para descifrar el handshake.");
     }
 
-    return { session, usedOneTime };
+    const storedKeys = JSON.parse(storedKeysJson) as StoredKeys;
+
+    // Reconstruir SPK con clave privada
+    const mySpk: SignedPreKey = {
+        id: storedKeys.spk.id,
+        signature: fromBase64(storedKeys.spk.signature),
+        keyPair: {
+            publicKey: fromBase64(storedKeys.spk.keyPair.publicKey),
+            privateKey: fromBase64(storedKeys.spk.keyPair.privateKey)
+        }
+    };
+
+    // Buscar la OTK privada correspondiente
+    let myOtk: OneTimePreKey | undefined = undefined;
+
+    if (handshake.oneTimePreKey) {
+        // Convertimos a Base64 para buscar en la lista
+        const targetPub = toBase64(handshake.oneTimePreKey);
+        const found = storedKeys.otks.find(k => k.keyPair.publicKey === targetPub);
+
+        if (found) {
+            myOtk = {
+                id: found.id,
+                keyPair: {
+                    publicKey: fromBase64(found.keyPair.publicKey),
+                    privateKey: fromBase64(found.keyPair.privateKey)
+                }
+            };
+        } else {
+            console.warn(`[X3DH] OTK pública recibida (${targetPub}) no encontrada localmente.`);
+        }
+    }
+
+    // Establecer sesión con las llaves privadas correctas
+    const { session, usedOneTime } = await establishSessionAsResponder(
+        identity,
+        mySpk,
+        myOtk ? [myOtk] : [],
+        {
+            // ✅ CORRECCIÓN: Pasar los Uint8Array directamente, no objetos anidados
+            ikEd25519: handshake.ikEd25519,
+            ikX25519: handshake.ikX25519,
+            // ✅ CORRECCIÓN: Pasar ephPubKey DENTRO de este objeto
+            ephPubKey: handshake.ephPubKey,
+            oneTimePreKey: handshake.oneTimePreKey
+        }
+    );
+
+    // Si se usó una OTK, la borramos del almacenamiento para evitar reuso (Forward Secrecy)
+    if (usedOneTime) {
+        const remainingOtks = storedKeys.otks.filter(k => k.keyPair.publicKey !== toBase64(usedOneTime));
+        // Guardamos de nuevo sin la llave usada
+        const newPayload: StoredKeys = {
+            ...storedKeys,
+            otks: remainingOtks
+        };
+        localStorage.setItem('securecomm.keys', JSON.stringify(newPayload));
+    }
+
+    return { session };
 }
 
 // --- Messaging ---
 
 export async function encryptMessage(state: SessionState, text: string) {
-    const { header, ciphertext } = await encrypt(state, new TextEncoder().encode(text));
+    // FIX: Envolvemos en new Uint8Array() para compatibilidad estricta con libsodium en tests
+    const plaintextBytes = new Uint8Array(sodium.from_string(text));
+
+    const { header, ciphertext } = await encrypt(state, plaintextBytes);
+
+    // Serializamos header para transporte
+    const headerJson = sodium.to_string(serializeHeader(header));
+
     return {
         header,
         ciphertextHex: Buffer.from(ciphertext).toString('hex'),
-        serializedHeader: JSON.parse(new TextDecoder().decode(serializeHeader(header))),
+        serializedHeader: JSON.parse(headerJson),
     };
 }
 
@@ -204,10 +274,12 @@ export async function decryptMessage(state: SessionState, headerPayload: Record<
     const headerStr = typeof headerPayload === 'string' ? headerPayload : JSON.stringify(headerPayload);
     const header = deserializeHeader(headerStr);
 
-    const ciphertext = Uint8Array.from(Buffer.from(ciphertextHex, 'hex'));
+    const ciphertext = new Uint8Array(Buffer.from(ciphertextHex, 'hex'));
 
     const plaintext = await decrypt(state, header, ciphertext);
-    return new TextDecoder().decode(plaintext);
+
+    // FIX: Usamos utilidades de sodium para decodificar
+    return sodium.to_string(plaintext);
 }
 
 export async function keyFingerprint(pub: Uint8Array) {

@@ -326,7 +326,17 @@ export async function decrypt(session: SessionState, header: SessionHeader, ciph
 }
 
 function decryptWithKey(key: Uint8Array, header: SessionHeader, ciphertextWithNonce: Uint8Array): Uint8Array {
-    const headerBytes = serializeHeader(header);
+    // --- CORRECCIÓN CRÍTICA ---
+    // Creamos una copia de la cabecera y le quitamos 'x3dh'.
+    // Esto es necesario porque al momento de ENCRIPTAR, el campo x3dh no existía,
+    // así que la firma original se hizo sobre los datos "limpios".
+    const headerForAD = { ...header };
+    delete headerForAD.x3dh;
+
+    // Serializamos la versión limpia para usarla como "Additional Data" (AD)
+    const headerBytes = serializeHeader(headerForAD);
+    // --------------------------
+
     const nonceLen = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     const nonce = ciphertextWithNonce.slice(0, nonceLen);
     const ciphertext = ciphertextWithNonce.slice(nonceLen);
@@ -334,7 +344,7 @@ function decryptWithKey(key: Uint8Array, header: SessionHeader, ciphertextWithNo
     return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
         null,
         ciphertext,
-        headerBytes,
+        headerBytes, // Usamos los bytes limpios (sin x3dh)
         nonce,
         key
     );
@@ -380,27 +390,26 @@ async function ratchet(session: SessionState, header: SessionHeader) {
 
 export function serializeHeader(header: SessionHeader): Uint8Array {
     const obj: any = {
-        d: sodium.to_base64(header.dh),
+        // CAMBIO: Agregar la variante URLSAFE_NO_PADDING
+        d: sodium.to_base64(header.dh, sodium.base64_variants.URLSAFE_NO_PADDING),
         n: header.n,
         p: header.pn
     };
-    // ESTA ES LA PARTE QUE FALTABA EN TU ARCHIVO
     if (header.x3dh) {
         obj.x = header.x3dh;
     }
     const json = JSON.stringify(obj);
-    return sodium.from_string(json);
+    return new Uint8Array(sodium.from_string(json));
 }
 
 export function deserializeHeader(data: Uint8Array | string): SessionHeader {
     const json = typeof data === 'string' ? data : sodium.to_string(data);
     const parsed = JSON.parse(json);
     const header: SessionHeader = {
-        dh: sodium.from_base64(parsed.d),
+        dh: sodium.from_base64(parsed.d, sodium.base64_variants.URLSAFE_NO_PADDING),
         n: parsed.n,
-        pn: parsed.p
+        p: parsed.p
     };
-    // ESTA TAMBIÉN FALTABA
     if (parsed.x) {
         header.x3dh = parsed.x;
     }
@@ -410,7 +419,8 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
 export function serializeSession(session: SessionState): string {
     return JSON.stringify(session, (_, value) => {
         if (value instanceof Uint8Array) {
-            return { __type: 'bytes', data: sodium.to_base64(value) };
+            // CAMBIO: URLSafe
+            return { __type: 'bytes', data: sodium.to_base64(value, sodium.base64_variants.URLSAFE_NO_PADDING) };
         }
         return value;
     });
@@ -419,7 +429,8 @@ export function serializeSession(session: SessionState): string {
 export function deserializeSession(json: string): SessionState {
     return JSON.parse(json, (_, value) => {
         if (value && value.__type === 'bytes') {
-            return sodium.from_base64(value.data);
+            // CAMBIO: URLSafe
+            return sodium.from_base64(value.data, sodium.base64_variants.URLSAFE_NO_PADDING);
         }
         return value;
     }) as SessionState;

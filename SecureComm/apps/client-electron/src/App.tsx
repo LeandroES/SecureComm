@@ -333,7 +333,7 @@ export default function App() {
             const senderIkX = fromBase64(senderBundle.ik_pub);
             const senderIkEd = fromBase64(senderBundle.sig_pub);
 
-            const ephKey = fromBase64(headerAny.dh);
+            const ephKey = fromBase64(headerAny.d);
             // Manejamos OTK opcional
             const usedOtk = headerAny.x3dh.otk ? fromBase64(headerAny.x3dh.otk) : undefined;
 
