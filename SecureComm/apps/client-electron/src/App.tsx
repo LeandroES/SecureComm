@@ -426,7 +426,20 @@ export default function App() {
     }
 
     async function sendMessage(peer: string, message: string) {
-        const session = sessions[peer];
+        let session = sessions[peer];
+        // --- FIX: Si no hay sesión en memoria (ej. tras F5), intentar cargarla del disco ---
+        if (!session) {
+            const loaded = loadSessionFromStorage(peer);
+            if (loaded) {
+                // La guardamos en el estado para la próxima vez
+                setSessions(prev => ({ ...prev, [peer]: loaded }));
+                sessionsRef.current[peer] = loaded;
+                session = loaded;
+                appendLog(`Sesión restaurada para ${peer}`);
+            }
+        }
+        // ----------------------------------------------------------------------------------
+
         if (!session || !wsRef.current) {
             appendLog('No hay sesión o socket');
             return;

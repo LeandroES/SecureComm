@@ -447,8 +447,10 @@ export function serializeSession(session: SessionState): string {
 export function deserializeSession(json: string): SessionState {
     return JSON.parse(json, (_, value) => {
         if (value && value.__type === 'bytes') {
-            // CAMBIO: URLSafe
-            return sodium.from_base64(value.data, sodium.base64_variants.URLSAFE_NO_PADDING);
+            // FIX CRÍTICO: Envolver en new Uint8Array()
+            // Esto es vital para que las llaves cargadas del LocalStorage (después de F5)
+            // sean idénticas a las generadas en memoria y no fallen en las funciones criptográficas.
+            return new Uint8Array(sodium.from_base64(value.data, sodium.base64_variants.URLSAFE_NO_PADDING));
         }
         return value;
     }) as SessionState;
