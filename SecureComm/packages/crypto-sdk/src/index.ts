@@ -313,7 +313,8 @@ export async function decrypt(session: SessionState, header: SessionHeader, ciph
         return decryptWithKey(mk, header, ciphertextWithNonce);
     }
 
-    if (session.remoteRatchetKey && !sodium.memcmp(header.dh, session.remoteRatchetKey)) {
+    // FIX: Usar comparación de strings (Hex) para evitar falsos negativos de memcmp en tests
+    if (session.remoteRatchetKey && sodium.to_hex(header.dh) !== sodium.to_hex(session.remoteRatchetKey)) {
         await skipMessageKeys(session, header.pn);
         await ratchet(session, header);
     }
