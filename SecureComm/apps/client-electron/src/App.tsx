@@ -61,6 +61,17 @@ function useQRCode(data: string): string | null {
 }
 
 export default function App() {
+
+    // 1. Estados primero
+    const [sessions, setSessions] = useState<Record<string, SessionState>>({});
+
+    // 2. Ref INMEDIATAMENTE después
+    const sessionsRef = useRef(sessions);
+    // 3. Effect para mantener el ref actualizado
+    useEffect(() => {
+        sessionsRef.current = sessions;
+    }, [sessions]);
+
     const [status, setStatus] = useState<'idle' | 'ready' | 'auth'>('idle');
     const [token, setToken] = useState<string>('');
     const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem('securecomm.device') || '');
@@ -68,19 +79,30 @@ export default function App() {
     const [password, setPassword] = useState('');
     const [peerToStart, setPeerToStart] = useState('');
     const [sessions, setSessions] = useState<SessionBook>({});
+
+    const sessionBookRef = useRef(sessions);
+
+    useEffect(() => {
+        sessionBookRef.current = sessions;
+    }, [sessions]);
+
     const [chats, setChats] = useState<Record<string, Chat>>({});
     const [pendingBundle, setPendingBundle] = useState<PendingBundle | null>(null);
     const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
     const [log, setLog] = useState<string[]>([]);
     const wsRef = useRef<WebSocket | null>(null);
     const rotationMinutes = Number(import.meta.env.VITE_ROTATION_INTERVAL_MINUTES ?? '30');
+
     const qrPayload = useMemo(() => {
+        if (status !== 'ready') return '';
+
         const identity = loadIdentity();
         if (!identity) return 'no-identity';
         return JSON.stringify({
             ik: toBase64(identity.ikEd25519.publicKey),
         });
     }, [status]);
+
     const qrData = useQRCode(qrPayload);
 
     useEffect(() => {
@@ -101,6 +123,20 @@ export default function App() {
         ws.onmessage = (ev) => handleEnvelope(ev.data);
         return () => ws.close();
     }, [token]);
+
+    useEffect(() => {
+        // Solo sondeamos si el socket dice estar 'connected' y tenemos la referencia
+        if (wsStatus !== 'connected' || !wsRef.current) return;
+
+        // Preguntar por mensajes nuevos cada 2 segundos
+        const intervalId = setInterval(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ action: 'recv' }));
+            }
+        }, 2000);
+
+        return () => clearInterval(intervalId);
+    }, [wsStatus]);
 
     useEffect(() => {
         if (!token || rotationMinutes <= 0) return;
@@ -241,8 +277,7 @@ export default function App() {
         await rotatePreKeys(deviceId, token, {
             spk_pub: toBase64(spk.keyPair.publicKey),
             spk_sig: toBase64(spk.signature),
-            // ERROR WAS HERE TOO:
-            otk_pubs: otks.map((k) => toBase64(k.keyPair.publicKey)),
+            otk_pubs: otks.map((k: any) => toBase64(k.keyPair.publicKey)),
         });
         appendLog('Rotación de pre-keys completada');
     }
@@ -262,7 +297,7 @@ export default function App() {
         const hintedPeer =
             typeof (frame.ratchet_header as any)?.peer === 'string' ? ((frame.ratchet_header as any).peer as string) : 'desconocido';
         const chatKey = hintedPeer;
-        const session = sessions[chatKey];
+        const session = sessionsRef.current[chatKey];
         if (!session) {
             appendLog(`No hay sesión para ${chatKey}, ignorando`);
             return;

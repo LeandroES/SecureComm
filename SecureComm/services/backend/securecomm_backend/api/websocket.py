@@ -125,7 +125,7 @@ async def messaging_socket(
             elif action == "recv":
                 await deliver_pending()
                 await websocket.send_json({"status": "idle"})
-                break
+                #break
             elif action == "receipt":
                 env_id = payload.get("id")
                 if env_id:
