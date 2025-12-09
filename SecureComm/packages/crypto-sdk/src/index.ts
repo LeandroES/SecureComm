@@ -313,11 +313,25 @@ export async function decrypt(session: SessionState, header: SessionHeader, ciph
         return decryptWithKey(mk, header, ciphertextWithNonce);
     }
 
-    // FIX: Usar comparación de strings (Hex) para evitar falsos negativos de memcmp en tests
-    if (session.remoteRatchetKey && sodium.to_hex(header.dh) !== sodium.to_hex(session.remoteRatchetKey)) {
+    // --- FIX: Manual Byte Comparison ---
+    // We compare bytes manually to avoid any issues with memory references or library helpers
+    let keysMatch = false;
+    if (session.remoteRatchetKey && header.dh.length === session.remoteRatchetKey.length) {
+        keysMatch = true;
+        for (let i = 0; i < header.dh.length; i++) {
+            if (header.dh[i] !== session.remoteRatchetKey[i]) {
+                keysMatch = false;
+                break;
+            }
+        }
+    }
+
+    // Logic: If keys are DIFFERENT (!keysMatch), we ratchet.
+    if (session.remoteRatchetKey && !keysMatch) {
         await skipMessageKeys(session, header.pn);
         await ratchet(session, header);
     }
+    // -----------------------------------
 
     await skipMessageKeys(session, header.n);
 
