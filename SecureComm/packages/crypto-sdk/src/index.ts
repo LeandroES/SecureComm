@@ -41,7 +41,7 @@ export type SessionHeader = {
     dh: Uint8Array;
     pn: number;
     n: number;
-    // NUEVO: Campo vital para el handshake
+    // NUEVO: Esto es lo que le falta a tu archivo actual
     x3dh?: {
         otk?: string;
     };
@@ -286,6 +286,7 @@ export async function encrypt(session: SessionState, plaintext: Uint8Array): Pro
     };
     session.n.send++;
 
+    // La serialización ahora incluirá x3dh si se agrega antes en el wrapper
     const headerBytes = serializeHeader(header);
     const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
@@ -375,7 +376,7 @@ async function ratchet(session: SessionState, header: SessionHeader) {
     session.n.send = 0;
 }
 
-// --- Serialization Helpers (CORRECCIÓN CRÍTICA APLICADA) ---
+// --- Serialization Helpers (CORRECCIÓN IMPORTANTE) ---
 
 export function serializeHeader(header: SessionHeader): Uint8Array {
     const obj: any = {
@@ -383,7 +384,7 @@ export function serializeHeader(header: SessionHeader): Uint8Array {
         n: header.n,
         p: header.pn
     };
-    // AQUÍ ESTABA EL ERROR: Ahora incluimos x3dh
+    // ESTA ES LA PARTE QUE FALTABA EN TU ARCHIVO
     if (header.x3dh) {
         obj.x = header.x3dh;
     }
@@ -399,7 +400,7 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
         n: parsed.n,
         pn: parsed.p
     };
-    // Y lo recuperamos aquí
+    // ESTA TAMBIÉN FALTABA
     if (parsed.x) {
         header.x3dh = parsed.x;
     }
