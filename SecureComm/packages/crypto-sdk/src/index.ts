@@ -426,7 +426,7 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
         // FIX: Envolver en new Uint8Array para que la comparación memcmp no falle
         dh: new Uint8Array(sodium.from_base64(parsed.d, sodium.base64_variants.URLSAFE_NO_PADDING)),
         n: parsed.n,
-        p: parsed.p
+        pn: parsed.p
     };
     if (parsed.x) {
         header.x3dh = parsed.x;
