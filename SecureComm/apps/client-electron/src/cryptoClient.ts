@@ -1,4 +1,4 @@
-import SessionState, {
+import {
     bootstrapIdentity,
     decrypt,
     deserializeHeader,
@@ -12,31 +12,42 @@ import SessionState, {
     replenishOneTimePreKeys,
     rotateSignedPreKey,
     serializeHeader,
-    serializeSession,   // <--- Nuevo
-    deserializeSession, // <--- Nuevo
+    serializeSession,
+    deserializeSession,
     type Identity,
     type OneTimePreKey,
     type PreKeyBundle,
-    type SessionHeader, // antes Header
-    // antes Session
+    type SessionHeader,
+    type SessionState,
     type SignedPreKey,
 } from '@securecomm/crypto-sdk';
 import sodium from 'libsodium-wrappers';
-import {raw} from "concurrently/dist/src/defaults";
 
-// Tipos para almacenamiento local
+// --- Storage Types ---
 export type StoredIdentity = {
     ikEd25519: string;
     ikX25519: string;
     ikSecret: string;
 };
 
-// Crypto Init Wrapper
+// Tipos para guardar llaves privadas localmente
+export type StoredKeys = {
+    spk: {
+        keyPair: { publicKey: string; privateKey: string };
+        signature: string;
+        id: number;
+    };
+    otks: Array<{
+        keyPair: { publicKey: string; privateKey: string };
+        id: number;
+    }>;
+};
+
+// --- Helpers ---
 export async function initCrypto() {
     await sodium.ready;
 }
 
-// Helpers de conversión
 export function toBase64(data: Uint8Array): string {
     return sodium.to_base64(data, sodium.base64_variants.ORIGINAL);
 }
@@ -46,7 +57,6 @@ export function fromBase64(data: string): Uint8Array {
 }
 
 // --- Identity Management ---
-
 export function storeIdentity(id: Identity) {
     const payload: StoredIdentity = {
         ikEd25519: toBase64(id.ikEd25519.publicKey),
@@ -84,11 +94,61 @@ export async function createIdentity(seed?: Uint8Array) {
     return id;
 }
 
-// --- PreKeys & Bundle ---
+// --- Local Key Management ---
+
+export function storeLocalKeys(spk: SignedPreKey, otks: OneTimePreKey[]) {
+    const payload: StoredKeys = {
+        spk: {
+            id: spk.id,
+            signature: toBase64(spk.signature),
+            keyPair: {
+                publicKey: toBase64(spk.keyPair.publicKey),
+                privateKey: toBase64(spk.keyPair.privateKey)
+            }
+        },
+        otks: otks.map(k => ({
+            id: k.id,
+            keyPair: {
+                publicKey: toBase64(k.keyPair.publicKey),
+                privateKey: toBase64(k.keyPair.privateKey)
+            }
+        }))
+    };
+    localStorage.setItem('securecomm.keys', JSON.stringify(payload));
+}
+
+export function loadLocalKeys(): { spk: SignedPreKey, otks: OneTimePreKey[] } | null {
+    const raw = localStorage.getItem('securecomm.keys');
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw) as StoredKeys;
+        return {
+            spk: {
+                id: parsed.spk.id,
+                signature: fromBase64(parsed.spk.signature),
+                keyPair: {
+                    publicKey: fromBase64(parsed.spk.keyPair.publicKey),
+                    privateKey: fromBase64(parsed.spk.keyPair.privateKey)
+                }
+            },
+            otks: parsed.otks.map(k => ({
+                id: k.id,
+                keyPair: {
+                    publicKey: fromBase64(k.keyPair.publicKey),
+                    privateKey: fromBase64(k.keyPair.privateKey)
+                }
+            }))
+        };
+    } catch (e) {
+        console.error("Failed to load local keys", e);
+        return null;
+    }
+}
 
 export async function generateBundle(identity: Identity, otkCount = 5) {
     const spk = await generateSignedPreKey(identity);
     const otks = await generateOneTimePreKeys(otkCount);
+    storeLocalKeys(spk, otks);
     const bundle = await exportBundle(identity, spk, otks[0]);
     return { spk, otks, bundle };
 }
@@ -96,25 +156,36 @@ export async function generateBundle(identity: Identity, otkCount = 5) {
 export async function refreshPreKeys(identity: Identity, otkCount = 5) {
     const spk = await rotateSignedPreKey(identity);
     const otks = await replenishOneTimePreKeys(otkCount);
+    storeLocalKeys(spk, otks);
     return { spk, otks };
 }
 
 // --- Session Wrappers ---
 
-// NOTA: El SDK actualizado devuelve session + header en initiator
 export async function initiatorSession(identity: Identity, peer: PreKeyBundle) {
     const { session, header } = await establishSessionAsInitiator(identity, peer);
-    // header no es el estado del header, es un fake header inicial, lo ignoramos aqui si no lo usamos inmediatamente
     return { session, headerState: header };
 }
 
-export async function responderSession(
+export async function autoResponderSession(
     identity: Identity,
-    signedPreKey: SignedPreKey,
-    otks: OneTimePreKey[],
-    peerIdentity: { ikEd25519: Uint8Array; ikX25519: Uint8Array; ephPubKey: Uint8Array; oneTimePreKey?: Uint8Array },
+    peerIdentity: { ikEd25519: Uint8Array; ikX25519: Uint8Array; ephPubKey: Uint8Array; oneTimePreKey?: Uint8Array }
 ) {
-    const { session, usedOneTime } = await establishSessionAsResponder(identity, signedPreKey, otks, peerIdentity);
+    const keys = loadLocalKeys();
+    if (!keys) throw new Error("No local pre-keys found! Cannot establish session.");
+
+    const { session, usedOneTime } = await establishSessionAsResponder(
+        identity,
+        keys.spk,
+        keys.otks,
+        peerIdentity
+    );
+
+    if (usedOneTime) {
+        const remainingOtks = keys.otks.filter(k => toBase64(k.keyPair.publicKey) !== toBase64(usedOneTime));
+        storeLocalKeys(keys.spk, remainingOtks);
+    }
+
     return { session, usedOneTime };
 }
 
@@ -125,13 +196,11 @@ export async function encryptMessage(state: SessionState, text: string) {
     return {
         header,
         ciphertextHex: Buffer.from(ciphertext).toString('hex'),
-        // Usamos el serializador JSON del header para el transporte
         serializedHeader: JSON.parse(new TextDecoder().decode(serializeHeader(header))),
     };
 }
 
 export async function decryptMessage(state: SessionState, headerPayload: Record<string, unknown> | string, ciphertextHex: string) {
-    // Si viene como objeto del websocket, lo convertimos a string para deserializeHeader
     const headerStr = typeof headerPayload === 'string' ? headerPayload : JSON.stringify(headerPayload);
     const header = deserializeHeader(headerStr);
 
@@ -150,8 +219,7 @@ export function shortAuthCode(fp: string) {
     return short.match(/.{1,5}/g)?.join('-') ?? short;
 }
 
-// --- Session Storage Utilities ---
-// Estos son vitales para guardar el estado complejo (Uint8Array anidados) en localStorage
+// --- Session Storage ---
 
 export function saveSessionToStorage(peerUsername: string, session: SessionState) {
     const serialized = serializeSession(session);

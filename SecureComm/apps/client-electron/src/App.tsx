@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import SessionState from '@securecomm/crypto-sdk';
+import type { SessionState } from '@securecomm/crypto-sdk';
 import {
     createIdentity,
     decryptMessage,
@@ -9,6 +9,7 @@ import {
     keyFingerprint,
     loadIdentity,
     initiatorSession,
+    autoResponderSession,
     shortAuthCode,
     toBase64,
     fromBase64,
@@ -36,10 +37,11 @@ type Chat = {
     messages: Array<{ sender: 'me' | 'them'; text: string; ts: string; error?: boolean }>;
     verified: boolean;
     fingerprint?: string;
+    pendingOtk?: string;
 };
 
 type SessionBook = Record<string, SessionState>;
-type PendingBundle = { bundle: BundleResponse; fingerprint: string };
+type PendingBundle = { bundle: BundleResponse; fingerprint: string; otkPub?: string };
 type WsStatus = 'disconnected' | 'connecting' | 'connected';
 
 function useQRCode(data: string): string | null {
@@ -61,7 +63,6 @@ function useQRCode(data: string): string | null {
 }
 
 export default function App() {
-    // --- ESTADOS ---
     const [status, setStatus] = useState<'idle' | 'ready' | 'auth'>('idle');
     const [token, setToken] = useState<string>('');
     const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem('securecomm.device') || '');
@@ -72,7 +73,6 @@ export default function App() {
     const [sessions, setSessions] = useState<SessionBook>({});
     const sessionsRef = useRef(sessions);
 
-    // Carga inicial de chats persistentes
     const [chats, setChats] = useState<Record<string, Chat>>(() => {
         try {
             const saved = localStorage.getItem(CHATS_STORAGE_KEY);
@@ -88,13 +88,12 @@ export default function App() {
     // @ts-ignore
     const rotationMinutes = Number(import.meta.env.VITE_ROTATION_INTERVAL_MINUTES ?? '30');
 
-    // --- EFECTOS ---
+    // --- EFFECTS ---
 
     useEffect(() => {
         void initCrypto().then(() => setStatus('ready'));
     }, []);
 
-    // Persistencia automática de sesiones y chats
     useEffect(() => {
         Object.entries(sessions).forEach(([peer, session]) => {
             saveSessionToStorage(peer, session);
@@ -106,7 +105,6 @@ export default function App() {
         localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
     }, [chats]);
 
-    // WebSocket logic
     useEffect(() => {
         if (!token) return;
         const ws = openSocket(token);
@@ -138,8 +136,6 @@ export default function App() {
         return () => clearInterval(id);
     }, [token, rotationMinutes]);
 
-    // --- HELPERS ---
-
     function appendLog(entry: string) {
         setLog((l) => [`[${new Date().toISOString()}] ${entry}`, ...l].slice(0, 50));
     }
@@ -153,7 +149,7 @@ export default function App() {
 
     const qrData = useQRCode(qrPayload);
 
-    // --- ACCIONES ---
+    // --- ACTIONS ---
 
     async function ensureIdentity() {
         const existing = loadIdentity();
@@ -220,7 +216,11 @@ export default function App() {
         try {
             const bundle = await fetchBundle(peerToStart, token);
             const fp = await keyFingerprint(fromBase64(bundle.ik_pub));
-            setPendingBundle({ bundle, fingerprint: fp });
+            setPendingBundle({
+                bundle,
+                fingerprint: fp,
+                otkPub: bundle.otk_pub || undefined
+            });
             appendLog(`Bundle recibido para ${peerToStart}`);
         } catch (err) {
             appendLog(`Error obteniendo bundle: ${err}`);
@@ -249,6 +249,7 @@ export default function App() {
 
             const { session } = await initiatorSession(identity, peerBundle);
             setSessions((prev) => ({ ...prev, [bundle.username]: session }));
+
             setChats((prev) => ({
                 ...prev,
                 [bundle.username]: {
@@ -256,8 +257,10 @@ export default function App() {
                     messages: prev[bundle.username]?.messages ?? [],
                     verified: false,
                     fingerprint: pendingBundle.fingerprint,
+                    pendingOtk: bundle.otk_pub || undefined // GUARDAR OTK
                 },
             }));
+
             setPendingBundle(null);
             appendLog(`Sesión iniciada con ${bundle.username}`);
         } catch (err) {
@@ -288,7 +291,6 @@ export default function App() {
         }
     }
 
-    // Recupera fingerprint del servidor si no lo tenemos localmente (Lazy Loading)
     async function resolveFingerprintIfNeeded(peerName: string, currentFp?: string) {
         if (currentFp) return currentFp;
         try {
@@ -307,7 +309,6 @@ export default function App() {
 
         let chatKey = hintedPeer;
 
-        // 1. Hidratar sesión desde disco
         if (!sessionsRef.current[chatKey]) {
             const loaded = loadSessionFromStorage(chatKey);
             if(loaded) {
@@ -316,54 +317,112 @@ export default function App() {
             }
         }
 
-        const session = sessionsRef.current[chatKey];
-        if (!session) {
-            appendLog(`No hay sesión para ${chatKey}, mensaje ignorado`);
-            return;
-        }
+        let session = sessionsRef.current[chatKey];
+        const headerAny = frame.ratchet_header as any;
 
-        // 2. Pre-cargar fingerprint si falta
+        // --- LÓGICA DE AUTO-HANDSHAKE ---
+        const tryEstablishSession = async () => {
+            // Verificamos si hay x3dh (ahora siempre se enviará)
+            if (!headerAny.x3dh) return null;
+
+            appendLog(`Detectado handshake X3DH de ${chatKey}. Estableciendo sesión...`);
+            const identity = loadIdentity();
+            if (!identity) throw new Error("Sin identidad local");
+
+            const senderBundle = await fetchBundle(chatKey, token);
+            const senderIkX = fromBase64(senderBundle.ik_pub);
+            const senderIkEd = fromBase64(senderBundle.sig_pub);
+
+            const ephKey = fromBase64(headerAny.dh);
+            // Manejamos OTK opcional
+            const usedOtk = headerAny.x3dh.otk ? fromBase64(headerAny.x3dh.otk) : undefined;
+
+            const { session: newSession } = await autoResponderSession(identity, {
+                ikX25519: senderIkX,
+                ikEd25519: senderIkEd,
+                ephPubKey: ephKey,
+                oneTimePreKey: usedOtk
+            });
+            return newSession;
+        };
+
+        try {
+            if (!session) {
+                const newSession = await tryEstablishSession();
+                if (newSession) {
+                    setSessions(prev => ({ ...prev, [chatKey]: newSession }));
+                    sessionsRef.current[chatKey] = newSession;
+                    session = newSession;
+                } else {
+                    // Si no hay sesión y no es un handshake, fallará abajo
+                }
+            }
+
+            if (!session) throw new Error("No hay sesión y no es un handshake válido");
+
+            try {
+                const text = await decryptMessage(session, frame.ratchet_header, frame.ciphertext);
+                await handleSuccess(chatKey, text, frame);
+            } catch (decryptErr) {
+                // Recuperación: Si falla y es un handshake, intentamos renegociar
+                if (headerAny.x3dh) {
+                    appendLog(`La sesión actual con ${chatKey} es inválida. Re-negociando...`);
+                    const newSession = await tryEstablishSession();
+                    if (newSession) {
+                        setSessions(prev => ({ ...prev, [chatKey]: newSession }));
+                        sessionsRef.current[chatKey] = newSession;
+                        const text = await decryptMessage(newSession, frame.ratchet_header, frame.ciphertext);
+                        await handleSuccess(chatKey, text, frame);
+                        return;
+                    }
+                }
+                throw decryptErr;
+            }
+
+        } catch (err) {
+            handleError(chatKey, err, frame);
+        }
+    }
+
+    async function handleSuccess(chatKey: string, text: string, frame: EnvelopeFrame) {
         let fingerprint = chats[chatKey]?.fingerprint;
         if (!fingerprint && chatKey !== 'desconocido') {
             fingerprint = await resolveFingerprintIfNeeded(chatKey, fingerprint);
         }
 
-        try {
-            // 3. Intentar descifrar
-            const text = await decryptMessage(session, frame.ratchet_header, frame.ciphertext);
+        setChats((prev) => ({
+            ...prev,
+            [chatKey]: {
+                peer: chatKey,
+                verified: prev[chatKey]?.verified ?? false,
+                fingerprint: fingerprint,
+                messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text, ts: frame.ts }],
+            },
+        }));
+        wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
+    }
 
-            // ÉXITO
-            setChats((prev) => ({
-                ...prev,
-                [chatKey]: {
-                    peer: chatKey,
-                    verified: prev[chatKey]?.verified ?? false,
-                    fingerprint: fingerprint, // Se guarda el fingerprint recuperado
-                    messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text, ts: frame.ts }],
-                },
-            }));
-            wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
-
-        } catch (err) {
-            // FALLO DE DESCIFRADO
-            appendLog(`Fallo descifrando mensaje de ${chatKey}: ${err}`);
-
-            // Aún así guardamos que llegó un mensaje (aunque sea erróneo) para depuración y para mostrar el Fingerprint
-            setChats((prev) => ({
-                ...prev,
-                [chatKey]: {
-                    peer: chatKey,
-                    verified: prev[chatKey]?.verified ?? false,
-                    fingerprint: fingerprint || 'Error obteniendo FP', // Intentamos mostrar algo
-                    messages: [...(prev[chatKey]?.messages ?? []), {
-                        sender: 'them',
-                        text: '⚠️ Mensaje indescifrable (Llaves incorrectas)',
-                        ts: frame.ts,
-                        error: true
-                    }],
-                },
-            }));
+    async function handleError(chatKey: string, err: any, frame: EnvelopeFrame) {
+        let fingerprint = chats[chatKey]?.fingerprint;
+        if (!fingerprint && chatKey !== 'desconocido') {
+            try { fingerprint = await resolveFingerprintIfNeeded(chatKey); } catch {}
         }
+
+        appendLog(`Error final procesando mensaje de ${chatKey}: ${err}`);
+        setChats((prev) => ({
+            ...prev,
+            [chatKey]: {
+                peer: chatKey,
+                verified: prev[chatKey]?.verified ?? false,
+                fingerprint: fingerprint || 'Error (Refresh Bundle)',
+                messages: [...(prev[chatKey]?.messages ?? []), {
+                    sender: 'them',
+                    text: '⚠️ Mensaje indescifrable (Conflicto de llaves)',
+                    ts: frame.ts,
+                    error: true
+                }],
+            },
+        }));
     }
 
     async function sendMessage(peer: string, message: string) {
@@ -374,11 +433,25 @@ export default function App() {
         }
         const { header, ciphertextHex, serializedHeader } = await encryptMessage(session, message);
 
+        let finalHeader = { ...serializedHeader, peer: username };
+
+        // CORRECCIÓN CRUCIAL: Enviar siempre x3dh en mensaje 0, aunque otk sea null
+        if (session.n.send === 0) {
+            const usedOtk = chats[peer]?.pendingOtk;
+            (finalHeader as any).x3dh = {
+                otk: usedOtk || undefined
+            };
+            // Solo borramos si existía, o simplemente limpiamos la flag del chat
+            setChats(prev => ({
+                ...prev,
+                [peer]: { ...prev[peer], pendingOtk: undefined }
+            }));
+        }
+
         const frame = {
             action: 'send',
             to_user: peer,
-            // Enviamos el header serializado limpio + el peer
-            ratchet_header: { ...serializedHeader, peer: username },
+            ratchet_header: finalHeader,
             ciphertext: ciphertextHex,
             msg_id: crypto.randomUUID(),
             ts: new Date().toISOString(),
@@ -389,9 +462,7 @@ export default function App() {
         setChats((prev) => ({
             ...prev,
             [peer]: {
-                peer,
-                verified: prev[peer]?.verified ?? false,
-                fingerprint: prev[peer]?.fingerprint,
+                ...prev[peer],
                 messages: [...(prev[peer]?.messages ?? []), { sender: 'me', text: message, ts: frame.ts }],
             },
         }));
