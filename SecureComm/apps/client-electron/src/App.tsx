@@ -84,6 +84,7 @@ export default function App() {
     const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
     const [log, setLog] = useState<string[]>([]);
     const wsRef = useRef<WebSocket | null>(null);
+    const sessionsHydratedRef = useRef(false);
 
     // @ts-ignore
     const rotationMinutes = Number(import.meta.env.VITE_ROTATION_INTERVAL_MINUTES ?? '30');
@@ -93,6 +94,28 @@ export default function App() {
     useEffect(() => {
         void initCrypto().then(() => setStatus('ready'));
     }, []);
+
+    useEffect(() => {
+        if (sessionsHydratedRef.current) return;
+        if (status !== 'ready' && status !== 'auth') return;
+
+        const restored: SessionBook = {};
+        Object.keys(chats).forEach((peer) => {
+            if (sessionsRef.current[peer]) return;
+            const loaded = loadSessionFromStorage(peer);
+            if (loaded) {
+                restored[peer] = loaded;
+                sessionsRef.current[peer] = loaded;
+                appendLog(`Sesión restaurada para ${peer}`);
+            }
+        });
+
+        if (Object.keys(restored).length > 0) {
+            setSessions((prev) => ({ ...restored, ...prev }));
+        }
+
+        sessionsHydratedRef.current = true;
+    }, [status, chats]);
 
     useEffect(() => {
         Object.entries(sessions).forEach(([peer, session]) => {
