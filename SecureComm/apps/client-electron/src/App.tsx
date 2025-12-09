@@ -436,7 +436,7 @@ export default function App() {
         let finalHeader = { ...serializedHeader, peer: username };
 
         // CORRECCIÓN CRUCIAL: Enviar siempre x3dh en mensaje 0, aunque otk sea null
-        if (session.n === 0) {
+        if (header.n === 0) {
             const usedOtk = chats[peer]?.pendingOtk;
             (finalHeader as any).x3dh = {
                 otk: usedOtk || undefined
