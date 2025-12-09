@@ -88,7 +88,8 @@ async def messaging_socket(
             try:
                 payload = await websocket.receive_json()
             except WebSocketDisconnect:
-                break
+                # El cliente se desconectó. No debemos intentar cerrar el socket de nuevo.
+                return
 
             action = payload.get("action")
             if action == "send":
@@ -125,7 +126,6 @@ async def messaging_socket(
             elif action == "recv":
                 await deliver_pending()
                 await websocket.send_json({"status": "idle"})
-                #break
             elif action == "receipt":
                 env_id = payload.get("id")
                 if env_id:
@@ -135,8 +135,15 @@ async def messaging_socket(
                         await session.commit()
                 await websocket.send_json({"status": "ack"})
             elif action == "close":
-                break
+                # Cierre ordenado solicitado por el cliente
+                await websocket.close()
+                return
             else:
                 await websocket.send_json({"error": "unknown_action"})
-    finally:
-        await websocket.close()
+    except Exception:
+        # En caso de otros errores no controlados, intentamos cerrar si es posible
+        # pero ignoramos si ya está cerrado para evitar el RuntimeError
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
