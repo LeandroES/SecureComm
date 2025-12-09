@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { SessionState } from '@securecomm/crypto-sdk';
+import SessionState from '@securecomm/crypto-sdk';
 import {
     createIdentity,
     decryptMessage,
@@ -13,6 +13,8 @@ import {
     toBase64,
     fromBase64,
     refreshPreKeys,
+    saveSessionToStorage,
+    loadSessionFromStorage
 } from './cryptoClient';
 import {
     fetchBundle,
@@ -27,23 +29,23 @@ import {
 import QRCode from 'qrcode';
 
 const DEFAULT_OTKS = 5;
+const CHATS_STORAGE_KEY = 'securecomm.chats';
 
 type Chat = {
     peer: string;
-    messages: Array<{ sender: 'me' | 'them'; text: string; ts: string }>;
+    messages: Array<{ sender: 'me' | 'them'; text: string; ts: string; error?: boolean }>;
     verified: boolean;
     fingerprint?: string;
 };
 
 type SessionBook = Record<string, SessionState>;
-
 type PendingBundle = { bundle: BundleResponse; fingerprint: string };
-
 type WsStatus = 'disconnected' | 'connecting' | 'connected';
 
 function useQRCode(data: string): string | null {
     const [uri, setUri] = useState<string | null>(null);
     useEffect(() => {
+        if (!data) return;
         let disposed = false;
         void (async () => {
             try {
@@ -53,62 +55,58 @@ function useQRCode(data: string): string | null {
                 console.error('QR encode failed', err);
             }
         })();
-        return () => {
-            disposed = true;
-        };
+        return () => { disposed = true; };
     }, [data]);
     return uri;
 }
 
 export default function App() {
-
-    // 1. Estados primero
-    const [sessions, setSessions] = useState<Record<string, SessionState>>({});
-
-    // 2. Ref INMEDIATAMENTE después
-    const sessionsRef = useRef(sessions);
-    // 3. Effect para mantener el ref actualizado
-    useEffect(() => {
-        sessionsRef.current = sessions;
-    }, [sessions]);
-
+    // --- ESTADOS ---
     const [status, setStatus] = useState<'idle' | 'ready' | 'auth'>('idle');
     const [token, setToken] = useState<string>('');
     const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem('securecomm.device') || '');
-    const [username, setUsername] = useState('');
+    const [username, setUsername] = useState(() => localStorage.getItem('securecomm.username') || '');
     const [password, setPassword] = useState('');
     const [peerToStart, setPeerToStart] = useState('');
+
     const [sessions, setSessions] = useState<SessionBook>({});
+    const sessionsRef = useRef(sessions);
 
-    const sessionBookRef = useRef(sessions);
+    // Carga inicial de chats persistentes
+    const [chats, setChats] = useState<Record<string, Chat>>(() => {
+        try {
+            const saved = localStorage.getItem(CHATS_STORAGE_KEY);
+            return saved ? JSON.parse(saved) : {};
+        } catch { return {}; }
+    });
 
-    useEffect(() => {
-        sessionBookRef.current = sessions;
-    }, [sessions]);
-
-    const [chats, setChats] = useState<Record<string, Chat>>({});
     const [pendingBundle, setPendingBundle] = useState<PendingBundle | null>(null);
     const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
     const [log, setLog] = useState<string[]>([]);
     const wsRef = useRef<WebSocket | null>(null);
+
+    // @ts-ignore
     const rotationMinutes = Number(import.meta.env.VITE_ROTATION_INTERVAL_MINUTES ?? '30');
 
-    const qrPayload = useMemo(() => {
-        if (status !== 'ready') return '';
-
-        const identity = loadIdentity();
-        if (!identity) return 'no-identity';
-        return JSON.stringify({
-            ik: toBase64(identity.ikEd25519.publicKey),
-        });
-    }, [status]);
-
-    const qrData = useQRCode(qrPayload);
+    // --- EFECTOS ---
 
     useEffect(() => {
         void initCrypto().then(() => setStatus('ready'));
     }, []);
 
+    // Persistencia automática de sesiones y chats
+    useEffect(() => {
+        Object.entries(sessions).forEach(([peer, session]) => {
+            saveSessionToStorage(peer, session);
+        });
+        sessionsRef.current = sessions;
+    }, [sessions]);
+
+    useEffect(() => {
+        localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
+    }, [chats]);
+
+    // WebSocket logic
     useEffect(() => {
         if (!token) return;
         const ws = openSocket(token);
@@ -125,30 +123,37 @@ export default function App() {
     }, [token]);
 
     useEffect(() => {
-        // Solo sondeamos si el socket dice estar 'connected' y tenemos la referencia
         if (wsStatus !== 'connected' || !wsRef.current) return;
-
-        // Preguntar por mensajes nuevos cada 2 segundos
         const intervalId = setInterval(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
                 wsRef.current.send(JSON.stringify({ action: 'recv' }));
             }
         }, 2000);
-
         return () => clearInterval(intervalId);
     }, [wsStatus]);
 
     useEffect(() => {
         if (!token || rotationMinutes <= 0) return;
-        const id = setInterval(() => {
-            void rotatePreKeysFlow();
-        }, rotationMinutes * 60 * 1000);
+        const id = setInterval(() => { void rotatePreKeysFlow(); }, rotationMinutes * 60 * 1000);
         return () => clearInterval(id);
     }, [token, rotationMinutes]);
+
+    // --- HELPERS ---
 
     function appendLog(entry: string) {
         setLog((l) => [`[${new Date().toISOString()}] ${entry}`, ...l].slice(0, 50));
     }
+
+    const qrPayload = useMemo(() => {
+        if (status !== 'ready') return '';
+        const identity = loadIdentity();
+        if (!identity) return '';
+        return JSON.stringify({ ik: toBase64(identity.ikEd25519.publicKey) });
+    }, [status]);
+
+    const qrData = useQRCode(qrPayload);
+
+    // --- ACCIONES ---
 
     async function ensureIdentity() {
         const existing = loadIdentity();
@@ -163,16 +168,6 @@ export default function App() {
             const identity = await ensureIdentity();
             const { spk, otks } = await generateBundle(identity, DEFAULT_OTKS);
             const newDeviceId = crypto.randomUUID();
-
-            // --- DEBUG LOGS ---
-            console.log('DEBUG Identity:', identity);
-            console.log('DEBUG SPK:', spk);
-            console.log('DEBUG OTKS[0]:', otks[0]);
-
-            if (!identity.ikX25519.publicKey) console.error('Falta identity.ikX25519.publicKey');
-            if (!spk.keyPair?.publicKey) console.error('Falta spk.keyPair.publicKey');
-            if (otks.some(k => !k.keyPair?.publicKey)) console.error('Falta publicKey en alguna OTK');
-            // ------------------
 
             const payload = {
                 username,
@@ -218,6 +213,10 @@ export default function App() {
 
     async function fetchPeerBundle() {
         if (!peerToStart || !token) return;
+        if (chats[peerToStart]?.fingerprint) {
+            appendLog(`Chat existente recuperado para ${peerToStart}`);
+            return;
+        }
         try {
             const bundle = await fetchBundle(peerToStart, token);
             const fp = await keyFingerprint(fromBase64(bundle.ik_pub));
@@ -228,10 +227,6 @@ export default function App() {
         }
     }
 
-    function fromB64(value: string) {
-        return Uint8Array.from(Buffer.from(value, 'base64'));
-    }
-
     async function startSessionWithPending() {
         if (!pendingBundle) return;
         const identity = loadIdentity();
@@ -239,15 +234,15 @@ export default function App() {
         try {
             const bundle: BundleResponse = pendingBundle.bundle;
             const peerBundle = {
-                identityKey: fromBase64(bundle.ik_pub),        // Clave X25519
-                identityKeyEd25519: fromBase64(bundle.sig_pub), // Clave Ed25519 (Firma)
+                identityKey: fromBase64(bundle.ik_pub),
+                identityKeyEd25519: fromBase64(bundle.sig_pub),
                 signedPreKey: {
-                    id: 0, // El backend actual no devuelve IDs, usamos 0 por defecto
+                    id: 0,
                     publicKey: fromBase64(bundle.spk_pub),
                     signature: fromBase64(bundle.spk_sig),
                 },
                 oneTimePreKey: bundle.otk_pub ? {
-                    id: 0, // Usamos 0 por defecto
+                    id: 0,
                     publicKey: fromBase64(bundle.otk_pub)
                 } : undefined,
             };
@@ -293,29 +288,81 @@ export default function App() {
         }
     }
 
+    // Recupera fingerprint del servidor si no lo tenemos localmente (Lazy Loading)
+    async function resolveFingerprintIfNeeded(peerName: string, currentFp?: string) {
+        if (currentFp) return currentFp;
+        try {
+            const bundle = await fetchBundle(peerName, token);
+            return await keyFingerprint(fromBase64(bundle.ik_pub));
+        } catch (e) {
+            console.error("No se pudo resolver fingerprint del remitente", e);
+            return undefined;
+        }
+    }
+
     async function processEnvelope(frame: EnvelopeFrame) {
-        const hintedPeer =
-            typeof (frame.ratchet_header as any)?.peer === 'string' ? ((frame.ratchet_header as any).peer as string) : 'desconocido';
-        const chatKey = hintedPeer;
+        const hintedPeer = typeof (frame.ratchet_header as any)?.peer === 'string'
+            ? ((frame.ratchet_header as any).peer as string)
+            : 'desconocido';
+
+        let chatKey = hintedPeer;
+
+        // 1. Hidratar sesión desde disco
+        if (!sessionsRef.current[chatKey]) {
+            const loaded = loadSessionFromStorage(chatKey);
+            if(loaded) {
+                setSessions(prev => ({...prev, [chatKey]: loaded}));
+                sessionsRef.current[chatKey] = loaded;
+            }
+        }
+
         const session = sessionsRef.current[chatKey];
         if (!session) {
-            appendLog(`No hay sesión para ${chatKey}, ignorando`);
+            appendLog(`No hay sesión para ${chatKey}, mensaje ignorado`);
             return;
         }
+
+        // 2. Pre-cargar fingerprint si falta
+        let fingerprint = chats[chatKey]?.fingerprint;
+        if (!fingerprint && chatKey !== 'desconocido') {
+            fingerprint = await resolveFingerprintIfNeeded(chatKey, fingerprint);
+        }
+
         try {
+            // 3. Intentar descifrar
             const text = await decryptMessage(session, frame.ratchet_header, frame.ciphertext);
+
+            // ÉXITO
             setChats((prev) => ({
                 ...prev,
                 [chatKey]: {
                     peer: chatKey,
                     verified: prev[chatKey]?.verified ?? false,
-                    fingerprint: prev[chatKey]?.fingerprint,
+                    fingerprint: fingerprint, // Se guarda el fingerprint recuperado
                     messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text, ts: frame.ts }],
                 },
             }));
             wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
+
         } catch (err) {
+            // FALLO DE DESCIFRADO
             appendLog(`Fallo descifrando mensaje de ${chatKey}: ${err}`);
+
+            // Aún así guardamos que llegó un mensaje (aunque sea erróneo) para depuración y para mostrar el Fingerprint
+            setChats((prev) => ({
+                ...prev,
+                [chatKey]: {
+                    peer: chatKey,
+                    verified: prev[chatKey]?.verified ?? false,
+                    fingerprint: fingerprint || 'Error obteniendo FP', // Intentamos mostrar algo
+                    messages: [...(prev[chatKey]?.messages ?? []), {
+                        sender: 'them',
+                        text: '⚠️ Mensaje indescifrable (Llaves incorrectas)',
+                        ts: frame.ts,
+                        error: true
+                    }],
+                },
+            }));
         }
     }
 
@@ -325,16 +372,20 @@ export default function App() {
             appendLog('No hay sesión o socket');
             return;
         }
-        const { header, ciphertextHex } = await encryptMessage(session, message);
+        const { header, ciphertextHex, serializedHeader } = await encryptMessage(session, message);
+
         const frame = {
             action: 'send',
             to_user: peer,
-            ratchet_header: { ...header, peer: username },
+            // Enviamos el header serializado limpio + el peer
+            ratchet_header: { ...serializedHeader, peer: username },
             ciphertext: ciphertextHex,
             msg_id: crypto.randomUUID(),
             ts: new Date().toISOString(),
         } as const;
+
         wsRef.current.send(JSON.stringify(frame));
+
         setChats((prev) => ({
             ...prev,
             [peer]: {
@@ -380,11 +431,11 @@ export default function App() {
                 <div className="verification-row">
                     <div>
                         <p>Escanea o comparte tu QR:</p>
-                        {qrData ? <img src={qrData} alt="qr" /> : <span>Generando QR...</span>}
+                        {qrData ? <img src={qrData} alt="qr" /> : <span>{status === 'ready' ? 'Listo' : '...'}</span>}
                     </div>
                     <div>
                         <p>Código corto (60 bits):</p>
-                        <code>{shortAuthCode(qrPayload)}</code>
+                        <code>{qrPayload ? shortAuthCode(qrPayload) : '...'}</code>
                     </div>
                 </div>
                 <p className="note">Marca la conversación como verificada cuando tu contacto confirme el código corto o fingerprint.</p>
@@ -403,7 +454,7 @@ export default function App() {
                 {pendingBundle ? (
                     <div className="bundle-info">
                         <p>
-                            Bundle para <strong>{pendingBundle.bundle.username}</strong> (fingerprint {pendingBundle.fingerprint})
+                            Bundle para <strong>{pendingBundle.bundle.username}</strong> (FP: {pendingBundle.fingerprint.slice(0, 10)}...)
                         </p>
                         <button onClick={startSessionWithPending}>Iniciar sesión X3DH</button>
                     </div>
@@ -418,7 +469,7 @@ export default function App() {
                         <div className="chat-header">
                             <h3>{chat.peer}</h3>
                             <div className="meta">
-                                <span>Fingerprint: {chat.fingerprint ?? 'N/A'}</span>
+                                <span>Fingerprint: {chat.fingerprint ?? 'Recuperando...'}</span>
                                 <span className={chat.verified ? 'verified' : 'unverified'}>
                   {chat.verified ? 'Verificada' : 'No verificada'}
                 </span>
@@ -427,7 +478,9 @@ export default function App() {
                         </div>
                         <div className="messages">
                             {chat.messages.map((m, idx) => (
-                                <div key={idx} className={`msg ${m.sender}`}> {m.text} <small>{m.ts}</small></div>
+                                <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
+                                    {m.text} <small>{m.ts}</small>
+                                </div>
                             ))}
                         </div>
                         <ChatComposer onSend={(text) => sendMessage(chat.peer, text)} />

@@ -1,18 +1,18 @@
 import type { SessionHeader } from '@securecomm/crypto-sdk';
 
 const API_BASE =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || `${window.location.origin}/api`;
+    import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || `${window.location.origin}/api`;
 const WS_BASE = import.meta.env.VITE_WS_URL || `${window.location.origin.replace('http', 'ws')}/ws/secure`;
 
 export type RegisterPayload = {
-  username: string;
-  password: string;
-  device_id?: string;
-  ik_pub: string;
-  sig_pub: string;
-  spk_pub: string;
-  spk_sig: string;
-  otk_pubs: string[];
+    username: string;
+    password: string;
+    device_id?: string;
+    ik_pub: string;
+    sig_pub: string;
+    spk_pub: string;
+    spk_sig: string;
+    otk_pubs: string[];
 };
 
 export type LoginPayload = {
@@ -24,6 +24,7 @@ export type LoginPayload = {
 export type BundleResponse = {
     username: string;
     ik_pub: string;
+    sig_pub: string;
     spk_pub: string;
     spk_sig: string;
     otk_pub?: string | null;

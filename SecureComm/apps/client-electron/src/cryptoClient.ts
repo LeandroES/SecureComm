@@ -1,4 +1,4 @@
-import {
+import SessionState, {
     bootstrapIdentity,
     decrypt,
     deserializeHeader,
@@ -12,56 +12,40 @@ import {
     replenishOneTimePreKeys,
     rotateSignedPreKey,
     serializeHeader,
+    serializeSession,   // <--- Nuevo
+    deserializeSession, // <--- Nuevo
     type Identity,
     type OneTimePreKey,
     type PreKeyBundle,
-    type SessionHeader,
-    type SessionState,
+    type SessionHeader, // antes Header
+    // antes Session
     type SignedPreKey,
 } from '@securecomm/crypto-sdk';
 import sodium from 'libsodium-wrappers';
+import {raw} from "concurrently/dist/src/defaults";
 
+// Tipos para almacenamiento local
 export type StoredIdentity = {
     ikEd25519: string;
     ikX25519: string;
     ikSecret: string;
 };
 
-export type SessionRecord = {
-    peer: string;
-    peerDevice: string;
-    state: SessionState;
-    fingerprint: string;
-    verified: boolean;
-};
-
+// Crypto Init Wrapper
 export async function initCrypto() {
     await sodium.ready;
 }
 
+// Helpers de conversión
 export function toBase64(data: Uint8Array): string {
-    // Usamos sodium si está listo, es más seguro y rápido
-    if (sodium && sodium.to_base64) {
-        return sodium.to_base64(data, sodium.base64_variants.ORIGINAL);
-    }
-    // Fallback estándar del navegador
-    const binary = String.fromCharCode(...data);
-    return btoa(binary);
+    return sodium.to_base64(data, sodium.base64_variants.ORIGINAL);
 }
 
 export function fromBase64(data: string): Uint8Array {
-    // Usamos sodium si está listo
-    if (sodium && sodium.from_base64) {
-        return sodium.from_base64(data, sodium.base64_variants.ORIGINAL);
-    }
-    // Fallback estándar del navegador
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
+    return sodium.from_base64(data, sodium.base64_variants.ORIGINAL);
 }
+
+// --- Identity Management ---
 
 export function storeIdentity(id: Identity) {
     const payload: StoredIdentity = {
@@ -94,15 +78,13 @@ export function loadIdentity(): Identity | null {
 }
 
 export async function createIdentity(seed?: Uint8Array) {
-
     await sodium.ready;
-    // Si no hay semilla, generamos una aleatoria de 32 bytes
-    const validSeed = seed || sodium.randombytes_buf(32);
-
-    const identity = await bootstrapIdentity(validSeed);
-    storeIdentity(identity);
-    return identity;
+    const id = await bootstrapIdentity(seed);
+    storeIdentity(id);
+    return id;
 }
+
+// --- PreKeys & Bundle ---
 
 export async function generateBundle(identity: Identity, otkCount = 5) {
     const spk = await generateSignedPreKey(identity);
@@ -117,9 +99,13 @@ export async function refreshPreKeys(identity: Identity, otkCount = 5) {
     return { spk, otks };
 }
 
+// --- Session Wrappers ---
+
+// NOTA: El SDK actualizado devuelve session + header en initiator
 export async function initiatorSession(identity: Identity, peer: PreKeyBundle) {
-    const { session, headerState } = await establishSessionAsInitiator(identity, peer);
-    return { session, headerState };
+    const { session, header } = await establishSessionAsInitiator(identity, peer);
+    // header no es el estado del header, es un fake header inicial, lo ignoramos aqui si no lo usamos inmediatamente
+    return { session, headerState: header };
 }
 
 export async function responderSession(
@@ -132,19 +118,26 @@ export async function responderSession(
     return { session, usedOneTime };
 }
 
+// --- Messaging ---
+
 export async function encryptMessage(state: SessionState, text: string) {
     const { header, ciphertext } = await encrypt(state, new TextEncoder().encode(text));
     return {
         header,
         ciphertextHex: Buffer.from(ciphertext).toString('hex'),
-        serializedHeader: serializeHeader(header),
+        // Usamos el serializador JSON del header para el transporte
+        serializedHeader: JSON.parse(new TextDecoder().decode(serializeHeader(header))),
     };
 }
 
 export async function decryptMessage(state: SessionState, headerPayload: Record<string, unknown> | string, ciphertextHex: string) {
-    const header: SessionHeader =
-        typeof headerPayload === 'string' ? deserializeHeader(headerPayload) : (headerPayload as SessionHeader);
-    const plaintext = await decrypt(state, header, Uint8Array.from(Buffer.from(ciphertextHex, 'hex')));
+    // Si viene como objeto del websocket, lo convertimos a string para deserializeHeader
+    const headerStr = typeof headerPayload === 'string' ? headerPayload : JSON.stringify(headerPayload);
+    const header = deserializeHeader(headerStr);
+
+    const ciphertext = Uint8Array.from(Buffer.from(ciphertextHex, 'hex'));
+
+    const plaintext = await decrypt(state, header, ciphertext);
     return new TextDecoder().decode(plaintext);
 }
 
@@ -153,7 +146,25 @@ export async function keyFingerprint(pub: Uint8Array) {
 }
 
 export function shortAuthCode(fp: string) {
-    // 60 bits ~ 10 chars base32; use first 15 hex chars grouped
     const short = fp.replace(/[^a-f0-9]/gi, '').slice(0, 15).toUpperCase();
     return short.match(/.{1,5}/g)?.join('-') ?? short;
+}
+
+// --- Session Storage Utilities ---
+// Estos son vitales para guardar el estado complejo (Uint8Array anidados) en localStorage
+
+export function saveSessionToStorage(peerUsername: string, session: SessionState) {
+    const serialized = serializeSession(session);
+    localStorage.setItem(`securecomm.session.${peerUsername}`, serialized);
+}
+
+export function loadSessionFromStorage(peerUsername: string): SessionState | null {
+    const raw = localStorage.getItem(`securecomm.session.${peerUsername}`);
+    if (!raw) return null;
+    try {
+        return deserializeSession(raw);
+    } catch (e) {
+        console.error("Error loading session", e);
+        return null;
+    }
 }
