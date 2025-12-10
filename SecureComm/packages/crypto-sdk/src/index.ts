@@ -108,7 +108,9 @@ function kdfChain(chainKey: Uint8Array): [Uint8Array, Uint8Array] {
 
 // --- Implementation ---
 
-export async function bootstrapIdentity(seed?: Uint8Array): Promise<Identity> {
+export async function bootstrapIdentity(
+    seed?: Uint8Array
+): Promise<Identity> {
     await ensureSodium();
     const validSeed = seed || sodium.randombytes_buf(32);
     const edKey = sodium.crypto_sign_seed_keypair(validSeed);
@@ -121,13 +123,17 @@ export async function bootstrapIdentity(seed?: Uint8Array): Promise<Identity> {
     };
 }
 
-export async function fingerprint(publicKey: Uint8Array): Promise<string> {
+export async function fingerprint(
+    publicKey: Uint8Array
+): Promise<string> {
     await ensureSodium();
     const hash = sodium.crypto_generichash(32, publicKey);
     return sodium.to_hex(hash);
 }
 
-export async function generateSignedPreKey(identity: Identity): Promise<SignedPreKey> {
+export async function generateSignedPreKey(
+    identity: Identity
+): Promise<SignedPreKey> {
     await ensureSodium();
     const keyPair = sodium.crypto_box_keypair();
     const signature = sodium.crypto_sign_detached(keyPair.publicKey, identity.ikEd25519.privateKey);
@@ -139,7 +145,9 @@ export async function generateSignedPreKey(identity: Identity): Promise<SignedPr
     };
 }
 
-export async function generateOneTimePreKeys(count: number): Promise<OneTimePreKey[]> {
+export async function generateOneTimePreKeys(
+    count: number
+): Promise<OneTimePreKey[]> {
     await ensureSodium();
     const keys: OneTimePreKey[] = [];
     for (let i = 0; i < count; i++) {
@@ -242,7 +250,7 @@ export async function establishSessionAsResponder(
     let usedOtk: Uint8Array | undefined;
 
     if (peerIdentity.oneTimePreKey) {
-        const match = otks.find(k => sodium.memcmp(k.keyPair.publicKey, peerIdentity.oneTimePreKey!) === true);
+        const match = otks.find(k => sodium.memcmp(k.keyPair.publicKey, peerIdentity.oneTimePreKey!));
         if (!match) throw new Error("OneTimePreKey not found locally");
 
         const dh4 = sodium.crypto_scalarmult(match.keyPair.privateKey, peerIdentity.ephPubKey);

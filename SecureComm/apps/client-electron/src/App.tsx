@@ -124,6 +124,11 @@ export default function App() {
         sessionsRef.current = sessions;
     }, [sessions]);
 
+    function persistSession(peer: string, session: SessionState) {
+        sessionsRef.current = { ...sessionsRef.current, [peer]: session };
+        setSessions((prev) => ({ ...prev, [peer]: session }));
+    }
+
     useEffect(() => {
         localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
     }, [chats]);
@@ -335,8 +340,7 @@ export default function App() {
         if (!sessionsRef.current[chatKey]) {
             const loaded = loadSessionFromStorage(chatKey);
             if(loaded) {
-                setSessions(prev => ({...prev, [chatKey]: loaded}));
-                sessionsRef.current[chatKey] = loaded;
+                persistSession(chatKey, loaded);
             }
         }
 
@@ -373,8 +377,7 @@ export default function App() {
             if (!session) {
                 const newSession = await tryEstablishSession();
                 if (newSession) {
-                    setSessions(prev => ({ ...prev, [chatKey]: newSession }));
-                    sessionsRef.current[chatKey] = newSession;
+                    persistSession(chatKey, newSession);
                     session = newSession;
                 } else {
                     // Si no hay sesión y no es un handshake, fallará abajo
@@ -385,6 +388,7 @@ export default function App() {
 
             try {
                 const text = await decryptMessage(session, frame.ratchet_header, frame.ciphertext);
+                persistSession(chatKey, session);
                 await handleSuccess(chatKey, text, frame);
             } catch (decryptErr) {
                 // Recuperación: Si falla y es un handshake, intentamos renegociar
@@ -392,8 +396,7 @@ export default function App() {
                     appendLog(`La sesión actual con ${chatKey} es inválida. Re-negociando...`);
                     const newSession = await tryEstablishSession();
                     if (newSession) {
-                        setSessions(prev => ({ ...prev, [chatKey]: newSession }));
-                        sessionsRef.current[chatKey] = newSession;
+                        persistSession(chatKey, newSession); //new
                         const text = await decryptMessage(newSession, frame.ratchet_header, frame.ciphertext);
                         await handleSuccess(chatKey, text, frame);
                         return;
@@ -468,7 +471,7 @@ export default function App() {
             return;
         }
         const { header, ciphertextHex, serializedHeader } = await encryptMessage(session, message);
-
+        persistSession(peer, session);
         let finalHeader = { ...serializedHeader, peer: username };
 
         // CORRECCIÓN CRUCIAL: Enviar siempre x3dh en mensaje 0, aunque otk sea null
