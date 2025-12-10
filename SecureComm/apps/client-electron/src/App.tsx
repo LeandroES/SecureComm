@@ -514,59 +514,90 @@ export default function App() {
         }));
     }
 
+    const statusBlocks = [
+        { label: 'SDK', value: status === 'auth' || status === 'ready' ? 'OK' : 'Cargando...', tone: status === 'auth' || status === 'ready' ? 'pill-ok' : 'pill-warn' },
+        { label: 'WebSocket', value: wsStatus, tone: wsStatus === 'connected' ? 'pill-ok' : wsStatus === 'connecting' ? 'pill-warn' : 'pill-bad' },
+        { label: 'Device', value: deviceId ? deviceId.slice(0, 8) : 'sin registrar', tone: deviceId ? 'pill-quiet' : 'pill-warn' },
+    ];
+
+
     return (
 
         <div className="app-shell">
-            <header>
-                <h1>SecureComm</h1>
-                <p>Mensajería E2E con X3DH + Double Ratchet.</p>
+            <header className="hero">
+                <div>
+                    <p className="eyebrow">SecureComm</p>
+                    <h1>Mensajería E2E con X3DH + Double Ratchet</h1>
+                    <p className="lede">
+                        Gestiona identidades, comparte llaves y conversa con mayor claridad visual. Todo el flujo seguro en una sola vista.
+                    </p>
+                    <div className="pill-group">
+                        <span className={`pill ${status === 'auth' || status === 'ready' ? 'pill-ok' : 'pill-warn'}`}>
+                            SDK: {status === 'ready' || status === 'auth' ? 'OK' : 'Cargando...'}
+                        </span>
+                        <span className={`pill ${wsStatus === 'connected' ? 'pill-ok' : wsStatus === 'connecting' ? 'pill-warn' : 'pill-bad'}`}>
+                            WebSocket: {wsStatus}
+                        </span>
+                    </div>
+                </div>
+                <div className="hero-qr">
+                    <div className="qr-card">
+                        <p className="label">Tu identidad</p>
+                        {qrData ? <img src={qrData} alt="Código QR de identidad" /> : <div className="qr-placeholder">{status === 'ready' ? 'Listo' : '...'}</div>}
+                        <div className="short-code">
+                            <span>Código corto</span>
+                            <strong>{qrPayload ? shortAuthCode(qrPayload) : '...'}</strong>
+                        </div>
+                    </div>
+                </div>
             </header>
 
-            <section className="auth-panel">
-                <h2>Registro / Login</h2>
-                <div className="auth-form">
-                    <input placeholder="usuario" value={username} onChange={(e) => setUsername(e.target.value)} />
-                    <input placeholder="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-                    <div className="auth-buttons">
-                        <button onClick={handleRegister}>Registrar</button>
-                        <button onClick={handleLogin}>Login</button>
+            <section className="grid two">
+                <div className="panel">
+                    <div className="panel-head">
+                        <div>
+                            <p className="label">Acceso</p>
+                            <h2>Registro / Login</h2>
+                        </div>
+                        <button className="ghost" onClick={() => { localStorage.clear(); window.location.reload(); }}>⚠️ Reset local</button>
                     </div>
 
-                    <div style={{ marginTop: 10 }}>
-                        <button
-                            onClick={() => {
-                                localStorage.clear();
-                                window.location.reload();
-                            }}
-                            style={{ backgroundColor: '#dc2626', fontSize: '0.8rem' }}
-                        >
-                            ⚠️ Reset Local (Dev)
-                        </button>
+                    <div className="auth-form">
+                        <input placeholder="usuario" value={username} onChange={(e) => setUsername(e.target.value)} />
+                        <input placeholder="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                        <div className="auth-buttons">
+                            <button onClick={handleRegister}>Registrar</button>
+                            <button onClick={handleLogin}>Login</button>
+                        </div>
+                        <div className="helper-text">Tus credenciales se guardan localmente para agilizar el reingreso.</div>
                     </div>
+                </div>
 
-                    <div className="status">
-                        SDK: {status === 'ready' || status === 'auth' ? 'OK' : 'cargando...'} | WS: {wsStatus}
+                <div className="panel">
+                    <p className="label">Verificación de identidad</p>
+                    <h2>Confirma con tu contacto</h2>
+                    <p className="helper-text">Comparte el QR o valida el código corto para marcar el chat como verificado.</p>
+                    <div className="identity-callout">
+                        <div>
+                            <p className="muted">Fingerprint local</p>
+                            <code>{qrPayload ? qrPayload : '...'}</code>
+                        </div>
+                        <div className="badge-grid">
+                            <div className="badge">Seguro</div>
+                            <div className="badge secondary">E2E</div>
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <section className="verification">
-                <h2>Verificación de identidad</h2>
-                <div className="verification-row">
+            <section className="panel">
+                <div className="panel-head">
                     <div>
-                        <p>Escanea o comparte tu QR:</p>
-                        {qrData ? <img src={qrData} alt="qr" /> : <span>{status === 'ready' ? 'Listo' : '...'}</span>}
-                    </div>
-                    <div>
-                        <p>Código corto (60 bits):</p>
-                        <code>{qrPayload ? shortAuthCode(qrPayload) : '...'}</code>
+                        <p className="label">Sesión</p>
+                        <h2>Inicio de chat</h2>
+                        <p className="helper-text">Obtén el bundle de tu contacto y arranca el handshake X3DH.</p>
                     </div>
                 </div>
-                <p className="note">Marca la conversación como verificada cuando tu contacto confirme el código corto o fingerprint.</p>
-            </section>
-
-            <section className="session-panel">
-                <h2>Inicio de chat</h2>
                 <div className="bundle-fetch">
                     <input
                         placeholder="usuario destino"
@@ -576,52 +607,75 @@ export default function App() {
                     <button onClick={fetchPeerBundle}>Obtener bundle</button>
                 </div>
                 {pendingBundle ? (
-                    <div className="bundle-info">
-                        <p>
-                            Bundle para <strong>{pendingBundle.bundle.username}</strong> (FP: {pendingBundle.fingerprint.slice(0, 10)}...)
-                        </p>
-                        <button onClick={startSessionWithPending}>Iniciar sesión X3DH</button>
-                    </div>
-                ) : null}
-            </section>
-
-            <section className="chat-list">
-                <h2>Chats</h2>
-                {Object.values(chats).length === 0 ? <p>Sin conversaciones activas.</p> : null}
-                {Object.values(chats).map((chat) => (
-                    <div key={chat.peer} className="chat-card">
-                        <div className="chat-header">
-                            <h3>{chat.peer}</h3>
-                            <div className="meta">
-                                <span>Fingerprint: {chat.fingerprint ?? 'Recuperando...'}</span>
-                                <span className={chat.verified ? 'verified' : 'unverified'}>
-                  {chat.verified ? 'Verificada' : 'No verificada'}
-                </span>
-                                {!chat.verified && <button onClick={() => markVerified(chat.peer)}>Marcar como verificada</button>}
+                        <div className="bundle-info">
+                            <p>
+                                Bundle para <strong>{pendingBundle.bundle.username}</strong> (FP: {pendingBundle.fingerprint.slice(0, 10)}...)
+                            </p>
+                            <div className="bundle-actions">
+                                <button onClick={startSessionWithPending}>Iniciar sesión X3DH</button>
+                                <span className="pill pill-warn">OTK: {pendingBundle.bundle.otk_pub ? 'Incluye' : 'No enviado'}</span>
                             </div>
                         </div>
-                        <div className="messages">
-                            {chat.messages.map((m, idx) => (
-                                <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
-                                    {m.text} <small>{m.ts}</small>
-                                </div>
-                            ))}
-                        </div>
-                        <ChatComposer onSend={(text) => sendMessage(chat.peer, text)} />
-                    </div>
-                ))}
+                ) : null}
             </section>
-
-            <section className="log-panel">
-                <h2>Bitácora</h2>
-                <pre>{log.join('\n')}</pre>
+            <section className="grid two stretch">
+                <div className="panel">
+                    <div className="panel-head">
+                        <div>
+                            <p className="label">Conversaciones</p>
+                            <h2>Chats</h2>
+                        </div>
+                        <span className="pill pill-quiet">{Object.values(chats).length} activos</span>
+                    </div>
+                    {Object.values(chats).length === 0 ? <p className="muted">Sin conversaciones activas.</p> : null}
+                    <div className="chat-grid">
+                        {Object.values(chats).map((chat) => (
+                            <div key={chat.peer} className="chat-card">
+                                <div className="chat-header">
+                                    <div>
+                                        <h3>{chat.peer}</h3>
+                                        <p className="muted">Fingerprint: {chat.fingerprint ?? 'Recuperando...'}</p>
+                                    </div>
+                                    <div className="meta">
+                                        <span className={`pill ${chat.verified ? 'pill-ok' : 'pill-warn'}`}>
+                                            {chat.verified ? 'Verificada' : 'No verificada'}
+                                        </span>
+                                        {!chat.verified && <button className="ghost" onClick={() => markVerified(chat.peer)}>Marcar verificada</button>}
+                                    </div>
+                                </div>
+                                <div className="messages">
+                                    {chat.messages.map((m, idx) => (
+                                        <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
+                                            <div>
+                                                <p>{m.text}</p>
+                                                <small>{new Date(m.ts).toLocaleString()}</small>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <ChatComposer onSend={(text) => sendMessage(chat.peer, text)} />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="panel log-panel">
+                    <div className="panel-head">
+                        <div>
+                            <p className="label">Monitoreo</p>
+                            <h2>Bitácora</h2>
+                        </div>
+                        <span className="pill pill-quiet">Últimos {log.length} eventos</span>
+                    </div>
+                    <pre>{log.join('\n')}</pre>
+                </div>
             </section>
         </div>
     );
 }
 
-function ChatComposer({ onSend }: { onSend: (text: string) => void }) {
+    function ChatComposer({ onSend }: { onSend: (text: string) => void }) {
     const [text, setText] = useState('');
+
     return (
         <div className="composer">
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Mensaje..." />
