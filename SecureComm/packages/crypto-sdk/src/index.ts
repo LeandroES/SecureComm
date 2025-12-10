@@ -41,7 +41,6 @@ export type SessionHeader = {
     dh: Uint8Array;
     pn: number;
     n: number;
-    // NUEVO: Esto es lo que le falta a tu archivo actual
     x3dh?: {
         otk?: string;
     };
@@ -445,8 +444,11 @@ export function deserializeHeader(data: Uint8Array | string): SessionHeader {
 export function serializeSession(session: SessionState): string {
     return JSON.stringify(session, (_, value) => {
         if (value instanceof Uint8Array) {
-            // CAMBIO: URLSafe
-            return { __type: 'bytes', data: sodium.to_base64(value, sodium.base64_variants.URLSAFE_NO_PADDING) };
+            // FIX: Agregar "as Uint8Array" para satisfacer al compilador
+            return {
+                __type: 'bytes',
+                data: sodium.to_base64(value as Uint8Array, sodium.base64_variants.URLSAFE_NO_PADDING)
+            };
         }
         return value;
     });
