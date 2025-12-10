@@ -180,7 +180,7 @@ export async function exportBundle(
     };
 }
 
-// --- Session Establishment ---
+// --- Session Establishment --- ya funciona bien
 
 export async function establishSessionAsInitiator(
     identity: Identity,

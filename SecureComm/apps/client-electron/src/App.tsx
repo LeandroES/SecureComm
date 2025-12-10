@@ -464,7 +464,7 @@ export default function App() {
                 appendLog(`Sesión restaurada para ${peer}`);
             }
         }
-        // ----------------------------------------------------------------------------------
+        // --------------------- -------------------------------------------------------------
 
         if (!session || !wsRef.current) {
             appendLog('No hay sesión o socket');

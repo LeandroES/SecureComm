@@ -278,7 +278,7 @@ export async function decryptMessage(state: SessionState, headerPayload: Record<
 
     const plaintext = await decrypt(state, header, ciphertext);
 
-    // FIX: Usamos utilidades de sodium para decodificar
+    // FIX: U  samos utilidades de sodium para decodificar
     return sodium.to_string(plaintext);
 }
 

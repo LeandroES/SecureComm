@@ -14,7 +14,7 @@ vi.mock('./cryptoClient', () => ({
 vi.mock('./api', () => ({
     openSocket: () => ({ close() {}, send() {} }),
 }));
-
+//asasdasd
 describe('App shell', () => {
     it('renders headers and sections', () => {
         render(<App />);
