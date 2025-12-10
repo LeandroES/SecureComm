@@ -255,13 +255,6 @@ export default function App() {
         setLog((l) => [`[${new Date().toISOString()}] ${entry}`, ...l].slice(0, 200));
     }
 
-    function clearStoredSessions(owner = username) {
-        const prefix = `securecomm.session.${owner || 'anon'}::`;
-        Object.keys(localStorage)
-            .filter((k) => k.startsWith(prefix))
-            .forEach((k) => localStorage.removeItem(k));
-    }
-
     function handleLogout(message = 'Sesión cerrada') {
         wsRef.current?.close();
         setToken('');
@@ -273,7 +266,6 @@ export default function App() {
         sessionsRef.current = {};
         sessionsHydratedRef.current = false;
         setActiveChat(null);
-        clearStoredSessions();
         appendLog(message);
     }
 
@@ -586,7 +578,7 @@ export default function App() {
 
         // --- FIX CRITICO: Cargar del disco si no está en memoria ---
         if (!session) {
-            const loaded = loadSessionFromStorage(peer) as SessionState;
+            const loaded = loadSessionFromStorage(sessionKey(peer)) as SessionState;
             if (loaded) {
                 persistSession(peer, loaded); // Usamos el helper centralizado
                 session = loaded;
@@ -655,7 +647,7 @@ export default function App() {
     return (
         <div className="app-shell">
             <nav className="topbar">
-                <div className="brand">🔐 SecureComm</div>
+                <div className="brand">SecureComm</div>
                 <div className="topbar-actions">
                     <span className={`pill ${statusBlocks[1].tone}`}>WS: {wsStatus}</span>
                     {isAuth && <button className="ghost" onClick={() => handleLogout()}>Cerrar sesión</button>}
@@ -769,36 +761,35 @@ export default function App() {
                             )}
                         </div>
                     </aside>
-
                     <section className="conversation">
                         {activeChatData ? (
-                                <div className="conversation-card">
-                                    <header className="conversation-head">
-                                        <div>
-                                            <h2>{activeChatData.peer}</h2>
-                                            <p className="muted">FP: {activeChatData.fingerprint ?? 'Resolviendo...'}</p>
-                                        </div>
-                                        <div className="mini-buttons">
-                                            {!activeChatData.verified && (
-                                                <button className="ghost" onClick={() => markVerified(activeChatData!.peer)}>Marcar verificada</button>
-                                            )}
-                                            <span className={`pill ${activeChatData.verified ? 'pill-ok' : 'pill-warn'}`}>
+                            <div className="conversation-card">
+                                <header className="conversation-head">
+                                    <div>
+                                        <h2>{activeChatData.peer}</h2>
+                                        <p className="muted">FP: {activeChatData.fingerprint ?? 'Resolviendo...'}</p>
+                                    </div>
+                                    <div className="mini-buttons">
+                                        {!activeChatData.verified && (
+                                            <button className="ghost" onClick={() => markVerified(activeChatData!.peer)}>Marcar verificada</button>
+                                        )}
+                                        <span className={`pill ${activeChatData.verified ? 'pill-ok' : 'pill-warn'}`}>
                                             {activeChatData.verified ? 'Seguro' : 'Pendiente'}
                                         </span>
-                                        </div>
-                                    </header>
-                                    <div className="messages">
-                                        {activeChatData.messages.map((m, idx) => (
-                                            <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
-                                                <div>
-                                                    <p>{m.text}</p>
-                                                    <small>{new Date(m.ts).toLocaleString()}</small>
-                                                </div>
-                                            </div>
-                                        ))}
                                     </div>
-                                    <ChatComposer onSend={(text) => sendMessage(activeChatData!.peer, text)} />
+                                </header>
+                                <div className="messages">
+                                    {activeChatData.messages.map((m, idx) => (
+                                        <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
+                                            <div>
+                                                <p>{m.text}</p>
+                                                <small>{new Date(m.ts).toLocaleString()}</small>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
+                                <ChatComposer onSend={(text) => sendMessage(activeChatData!.peer, text)} />
+                            </div>
                         ) : (
                             <div className="empty">
                                 <p className="muted">Selecciona o crea un chat para comenzar.</p>

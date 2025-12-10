@@ -46,6 +46,7 @@ export type SessionHeader = {
     };
 };
 
+
 export type SessionState = {
     rootKey: Uint8Array;
     chainKey: {
