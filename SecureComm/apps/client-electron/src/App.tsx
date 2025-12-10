@@ -47,7 +47,7 @@ type WsStatus = 'disconnected' | 'connecting' | 'connected';
 function useQRCode(data: string): string | null {
     const [uri, setUri] = useState<string | null>(null);
     useEffect(() => {
-        if (!data) return;
+        if (!data) return setUri(null);
         let disposed = false;
         void (async () => {
             try {
@@ -95,6 +95,7 @@ export default function App() {
         void initCrypto().then(() => setStatus('ready'));
     }, []);
 
+    // Hidratación de sesiones (Lógica del Diff + Full File)
     useEffect(() => {
         if (sessionsHydratedRef.current) return;
         if (status !== 'ready' && status !== 'auth') return;
@@ -142,7 +143,12 @@ export default function App() {
             setWsStatus('connected');
             ws.send(JSON.stringify({ action: 'recv' }));
         };
-        ws.onclose = () => setWsStatus('disconnected');
+        ws.onclose = () => {
+            setWsStatus('disconnected');
+            appendLog('Socket cerrado. Inicia sesión nuevamente si expiró el token.');
+            setStatus('ready');
+            setToken('');
+        };
         ws.onerror = () => setWsStatus('disconnected');
         ws.onmessage = (ev) => handleEnvelope(ev.data);
         return () => ws.close();
@@ -165,7 +171,33 @@ export default function App() {
     }, [token, rotationMinutes]);
 
     function appendLog(entry: string) {
-        setLog((l) => [`[${new Date().toISOString()}] ${entry}`, ...l].slice(0, 50));
+        setLog((l) => [`[${new Date().toISOString()}] ${entry}`, ...l].slice(0, 200));
+    }
+
+    function clearStoredSessions() {
+        Object.keys(localStorage)
+            .filter((k) => k.startsWith('securecomm.session.'))
+            .forEach((k) => localStorage.removeItem(k));
+    }
+
+    function handleLogout() {
+        wsRef.current?.close();
+        setToken('');
+        setStatus('ready');
+        setChats({});
+        setSessions({});
+        sessionsRef.current = {};
+        clearStoredSessions();
+        localStorage.removeItem(CHATS_STORAGE_KEY);
+        appendLog('Sesión cerrada y datos locales limpiados');
+    }
+
+    function copyToClipboard(text: string, label: string) {
+        if (!text) return;
+        navigator.clipboard?.writeText(text).then(
+            () => appendLog(`${label} copiado al portapapeles`),
+            () => appendLog(`No se pudo copiar ${label}`)
+        );
     }
 
     const qrPayload = useMemo(() => {
@@ -276,7 +308,7 @@ export default function App() {
             };
 
             const { session } = await initiatorSession(identity, peerBundle);
-            setSessions((prev) => ({ ...prev, [bundle.username]: session }));
+            persistSession(bundle.username, session);
 
             setChats((prev) => ({
                 ...prev,
@@ -285,7 +317,7 @@ export default function App() {
                     messages: prev[bundle.username]?.messages ?? [],
                     verified: false,
                     fingerprint: pendingBundle.fingerprint,
-                    pendingOtk: bundle.otk_pub || undefined // GUARDAR OTK
+                    pendingOtk: bundle.otk_pub || undefined
                 },
             }));
 
@@ -339,7 +371,7 @@ export default function App() {
 
         if (!sessionsRef.current[chatKey]) {
             const loaded = loadSessionFromStorage(chatKey);
-            if(loaded) {
+            if (loaded) {
                 persistSession(chatKey, loaded);
             }
         }
@@ -347,9 +379,7 @@ export default function App() {
         let session = sessionsRef.current[chatKey];
         const headerAny = frame.ratchet_header as any;
 
-        // --- LÓGICA DE AUTO-HANDSHAKE ---
         const tryEstablishSession = async () => {
-            // Verificamos si hay x3dh (ahora siempre se enviará)
             if (!headerAny.x3dh) return null;
 
             appendLog(`Detectado handshake X3DH de ${chatKey}. Estableciendo sesión...`);
@@ -361,7 +391,6 @@ export default function App() {
             const senderIkEd = fromBase64(senderBundle.sig_pub);
 
             const ephKey = fromBase64(headerAny.d);
-            // Manejamos OTK opcional
             const usedOtk = headerAny.x3dh.otk ? fromBase64(headerAny.x3dh.otk) : undefined;
 
             const { session: newSession } = await autoResponderSession(identity, {
@@ -379,8 +408,6 @@ export default function App() {
                 if (newSession) {
                     persistSession(chatKey, newSession);
                     session = newSession;
-                } else {
-                    // Si no hay sesión y no es un handshake, fallará abajo
                 }
             }
 
@@ -391,12 +418,11 @@ export default function App() {
                 persistSession(chatKey, session);
                 await handleSuccess(chatKey, text, frame);
             } catch (decryptErr) {
-                // Recuperación: Si falla y es un handshake, intentamos renegociar
                 if (headerAny.x3dh) {
                     appendLog(`La sesión actual con ${chatKey} es inválida. Re-negociando...`);
                     const newSession = await tryEstablishSession();
                     if (newSession) {
-                        persistSession(chatKey, newSession); //new
+                        persistSession(chatKey, newSession);
                         const text = await decryptMessage(newSession, frame.ratchet_header, frame.ciphertext);
                         await handleSuccess(chatKey, text, frame);
                         return;
@@ -425,13 +451,14 @@ export default function App() {
                 messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text, ts: frame.ts }],
             },
         }));
-        wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
+        // Opcional: enviar receipt
+        // wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
     }
 
     async function handleError(chatKey: string, err: any, frame: EnvelopeFrame) {
         let fingerprint = chats[chatKey]?.fingerprint;
         if (!fingerprint && chatKey !== 'desconocido') {
-            try { fingerprint = await resolveFingerprintIfNeeded(chatKey); } catch {}
+            try { fingerprint = await resolveFingerprintIfNeeded(chatKey); } catch { }
         }
 
         appendLog(`Error final procesando mensaje de ${chatKey}: ${err}`);
@@ -453,18 +480,17 @@ export default function App() {
 
     async function sendMessage(peer: string, message: string) {
         let session = sessions[peer];
-        // --- FIX: Si no hay sesión en memoria (ej. tras F5), intentar cargarla del disco ---
+
+        // --- FIX CRITICO: Cargar del disco si no está en memoria ---
         if (!session) {
             const loaded = loadSessionFromStorage(peer);
             if (loaded) {
-                // La guardamos en el estado para la próxima vez
-                setSessions(prev => ({ ...prev, [peer]: loaded }));
-                sessionsRef.current[peer] = loaded;
+                persistSession(peer, loaded); // Usamos el helper centralizado
                 session = loaded;
-                appendLog(`Sesión restaurada para ${peer}`);
+                appendLog(`Sesión restaurada para ${peer} al intentar enviar`);
             }
         }
-        // --------------------- -------------------------------------------------------------
+        // ----------------------------------------------------------
 
         if (!session || !wsRef.current) {
             appendLog('No hay sesión o socket');
@@ -472,15 +498,14 @@ export default function App() {
         }
         const { header, ciphertextHex, serializedHeader } = await encryptMessage(session, message);
         persistSession(peer, session);
+
         let finalHeader = { ...serializedHeader, peer: username };
 
-        // CORRECCIÓN CRUCIAL: Enviar siempre x3dh en mensaje 0, aunque otk sea null
         if (header.n === 0) {
             const usedOtk = chats[peer]?.pendingOtk;
             (finalHeader as any).x3dh = {
                 otk: usedOtk || undefined
             };
-            // Solo borramos si existía, o simplemente limpiamos la flag del chat
             setChats(prev => ({
                 ...prev,
                 [peer]: { ...prev[peer], pendingOtk: undefined }
@@ -514,16 +539,23 @@ export default function App() {
         }));
     }
 
+    // Configuración para el UI moderno del Diff
     const statusBlocks = [
         { label: 'SDK', value: status === 'auth' || status === 'ready' ? 'OK' : 'Cargando...', tone: status === 'auth' || status === 'ready' ? 'pill-ok' : 'pill-warn' },
         { label: 'WebSocket', value: wsStatus, tone: wsStatus === 'connected' ? 'pill-ok' : wsStatus === 'connecting' ? 'pill-warn' : 'pill-bad' },
         { label: 'Device', value: deviceId ? deviceId.slice(0, 8) : 'sin registrar', tone: deviceId ? 'pill-quiet' : 'pill-warn' },
     ];
 
-
     return (
-
         <div className="app-shell">
+            <nav className="topbar">
+                <div className="brand">🔐 SecureComm</div>
+                <div className="topbar-actions">
+                    <button className="ghost" onClick={() => copyToClipboard(qrPayload, 'Fingerprint local')}>Copiar fingerprint</button>
+                    <button className="ghost" onClick={() => copyToClipboard(shortAuthCode(qrPayload || ''), 'Código corto')}>Copiar código</button>
+                    <button className="ghost" onClick={handleLogout}>Cerrar sesión</button>
+                </div>
+            </nav>
             <header className="hero">
                 <div>
                     <p className="eyebrow">SecureComm</p>
@@ -531,13 +563,16 @@ export default function App() {
                     <p className="lede">
                         Gestiona identidades, comparte llaves y conversa con mayor claridad visual. Todo el flujo seguro en una sola vista.
                     </p>
-                    <div className="pill-group">
-                        <span className={`pill ${status === 'auth' || status === 'ready' ? 'pill-ok' : 'pill-warn'}`}>
-                            SDK: {status === 'ready' || status === 'auth' ? 'OK' : 'Cargando...'}
-                        </span>
-                        <span className={`pill ${wsStatus === 'connected' ? 'pill-ok' : wsStatus === 'connecting' ? 'pill-warn' : 'pill-bad'}`}>
-                            WebSocket: {wsStatus}
-                        </span>
+                    <div className="status-grid">
+                        {statusBlocks.map((item) => (
+                            <div key={item.label} className="status-card">
+                                <p className="label">{item.label}</p>
+                                <div className="status-row">
+                                    <strong>{item.value}</strong>
+                                    <span className={`pill ${item.tone}`}>{item.tone === 'pill-quiet' ? 'Listo' : item.value}</span>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
                 <div className="hero-qr">
@@ -547,6 +582,7 @@ export default function App() {
                         <div className="short-code">
                             <span>Código corto</span>
                             <strong>{qrPayload ? shortAuthCode(qrPayload) : '...'}</strong>
+                            <button className="pill ghost" onClick={() => copyToClipboard(qrPayload || '', 'QR payload')}>Copiar</button>
                         </div>
                     </div>
                 </div>
@@ -559,15 +595,15 @@ export default function App() {
                             <p className="label">Acceso</p>
                             <h2>Registro / Login</h2>
                         </div>
-                        <button className="ghost" onClick={() => { localStorage.clear(); window.location.reload(); }}>⚠️ Reset local</button>
+                        <div className="pill pill-quiet subtle">Persistimos identidad y device_id en localStorage.</div>
                     </div>
-
                     <div className="auth-form">
                         <input placeholder="usuario" value={username} onChange={(e) => setUsername(e.target.value)} />
                         <input placeholder="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
                         <div className="auth-buttons">
                             <button onClick={handleRegister}>Registrar</button>
                             <button onClick={handleLogin}>Login</button>
+                            <button className="ghost" onClick={handleLogout}>Cerrar sesión</button>
                         </div>
                         <div className="helper-text">Tus credenciales se guardan localmente para agilizar el reingreso.</div>
                     </div>
@@ -581,6 +617,10 @@ export default function App() {
                         <div>
                             <p className="muted">Fingerprint local</p>
                             <code>{qrPayload ? qrPayload : '...'}</code>
+                            <div className="tiny-actions">
+                                <button className="ghost" onClick={() => copyToClipboard(qrPayload || '', 'Fingerprint local')}>Copiar</button>
+                                <button className="ghost" onClick={() => copyToClipboard(shortAuthCode(qrPayload || ''), 'Código corto')}>Copiar código</button>
+                            </div>
                         </div>
                         <div className="badge-grid">
                             <div className="badge">Seguro</div>
@@ -597,6 +637,11 @@ export default function App() {
                         <h2>Inicio de chat</h2>
                         <p className="helper-text">Obtén el bundle de tu contacto y arranca el handshake X3DH.</p>
                     </div>
+                    <div className="micro-guide">
+                        <span>1) Busca a tu contacto</span>
+                        <span>2) Inicia X3DH</span>
+                        <span>3) Envía un mensaje</span>
+                    </div>
                 </div>
                 <div className="bundle-fetch">
                     <input
@@ -607,17 +652,18 @@ export default function App() {
                     <button onClick={fetchPeerBundle}>Obtener bundle</button>
                 </div>
                 {pendingBundle ? (
-                        <div className="bundle-info">
-                            <p>
-                                Bundle para <strong>{pendingBundle.bundle.username}</strong> (FP: {pendingBundle.fingerprint.slice(0, 10)}...)
-                            </p>
-                            <div className="bundle-actions">
-                                <button onClick={startSessionWithPending}>Iniciar sesión X3DH</button>
-                                <span className="pill pill-warn">OTK: {pendingBundle.bundle.otk_pub ? 'Incluye' : 'No enviado'}</span>
-                            </div>
+                    <div className="bundle-info">
+                        <p>
+                            Bundle para <strong>{pendingBundle.bundle.username}</strong> (FP: {pendingBundle.fingerprint.slice(0, 10)}...)
+                        </p>
+                        <div className="bundle-actions">
+                            <button onClick={startSessionWithPending}>Iniciar sesión X3DH</button>
+                            <span className="pill pill-warn">OTK: {pendingBundle.bundle.otk_pub ? 'Incluye' : 'No enviado'}</span>
                         </div>
+                    </div>
                 ) : null}
             </section>
+
             <section className="grid two stretch">
                 <div className="panel">
                     <div className="panel-head">
@@ -627,7 +673,12 @@ export default function App() {
                         </div>
                         <span className="pill pill-quiet">{Object.values(chats).length} activos</span>
                     </div>
-                    {Object.values(chats).length === 0 ? <p className="muted">Sin conversaciones activas.</p> : null}
+                    {Object.values(chats).length === 0 ? (
+                        <div className="empty">
+                            <p className="muted">Sin conversaciones activas.</p>
+                            <p className="helper-text">Obtén el bundle de un contacto y luego envía tu primer mensaje.</p>
+                        </div>
+                    ) : null}
                     <div className="chat-grid">
                         {Object.values(chats).map((chat) => (
                             <div key={chat.peer} className="chat-card">
@@ -658,13 +709,17 @@ export default function App() {
                         ))}
                     </div>
                 </div>
+
                 <div className="panel log-panel">
                     <div className="panel-head">
                         <div>
                             <p className="label">Monitoreo</p>
                             <h2>Bitácora</h2>
                         </div>
-                        <span className="pill pill-quiet">Últimos {log.length} eventos</span>
+                        <div className="log-actions">
+                            <span className="pill pill-quiet">Últimos {log.length} eventos</span>
+                            <button className="ghost" onClick={() => setLog([])}>Limpiar</button>
+                        </div>
                     </div>
                     <pre>{log.join('\n')}</pre>
                 </div>
@@ -673,9 +728,8 @@ export default function App() {
     );
 }
 
-    function ChatComposer({ onSend }: { onSend: (text: string) => void }) {
+function ChatComposer({ onSend }: { onSend: (text: string) => void }) {
     const [text, setText] = useState('');
-
     return (
         <div className="composer">
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Mensaje..." />
