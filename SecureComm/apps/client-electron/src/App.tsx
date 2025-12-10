@@ -47,11 +47,11 @@ function loadChatsFor(user: string): Record<string, Chat> {
 }
 
 function usernameIsValid(value: string) {
-    return /^[A-Za-z0-9._-]{5,32}$/.test(value);
+    return /^[A-Za-z0-9._-]{5,50}$/.test(value);
 }
 
 function passwordIsValid(value: string) {
-    return /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d!@#$%^&*()_+\-=.?,]{8,64}$/.test(value);
+    return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=.?,])[A-Za-z\d!@#$%^&*()_+\-=.?,]{5,64}$/.test(value);
 }
 
 type Chat = {
@@ -106,12 +106,15 @@ export default function App() {
 
     const [pendingBundle, setPendingBundle] = useState<PendingBundle | null>(null);
     const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
-    const [log, setLog] = useState<string[]>([]);
+    const beepRef = useRef<HTMLAudioElement | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const messagesRef = useRef<HTMLDivElement | null>(null);
     const sessionsHydratedRef = useRef(false);
 
     const [reconnectTick, setReconnectTick] = useState(0); // Para forzar reconexión del WS
     const inactivityTimer = useRef<number | null>(null);   // Para el logout automático
+
+    const [log, setLog] = useState<string[]>([]);
 
     // @ts-ignore
     const rotationMinutes = Number(import.meta.env.VITE_ROTATION_INTERVAL_MINUTES ?? '30');
@@ -168,6 +171,13 @@ export default function App() {
         });
         sessionsRef.current = sessions;
     }, [sessions]);
+
+    useEffect(() => {
+        if (!beepRef.current) {
+            beepRef.current = new Audio('data:audio/wav;base64,UklGRoQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQcAAAAA//////8AAP//AAD//wAA//8AAP//AAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP//AAD//wAA//8AAP//AAD//wAA');
+            beepRef.current.volume = 0.35;
+        }
+    }, []);
 
     const sessionKey = (peer: string) => `${username || 'anon'}::${peer}`;
 
@@ -266,6 +276,7 @@ export default function App() {
         sessionsRef.current = {};
         sessionsHydratedRef.current = false;
         setActiveChat(null);
+        setLog([]);
         appendLog(message);
     }
 
@@ -332,7 +343,7 @@ export default function App() {
 
     async function handleLogin() {
         if (!usernameIsValid(loginUser) || !passwordIsValid(loginPass)) {
-            setAuthMessage('Credenciales inválidas: usa mínimo 5 caracteres para usuario y 8 con números para la contraseña.');
+            setAuthMessage('Credenciales inválidas: usuario (5-50) y contraseña de mínimo 5 caracteres con mayúscula, número y símbolo.');
             return;
         }
         try {
@@ -362,8 +373,8 @@ export default function App() {
 
     async function fetchPeerBundle() {
         if (!peerToStart || !token) return;
-        if (chats[peerToStart]?.fingerprint) {
-            appendLog(`Chat existente recuperado para ${peerToStart}`);
+        if (!usernameIsValid(peerToStart)) {
+            setAuthMessage('El nombre del usuario destino debe tener entre 5 y 50 caracteres válidos.');
             return;
         }
         try {
@@ -537,15 +548,20 @@ export default function App() {
             fingerprint = await resolveFingerprintIfNeeded(chatKey, fingerprint);
         }
 
+        const safeText = text.slice(0, 255);
+
         setChats((prev) => ({
             ...prev,
             [chatKey]: {
                 peer: chatKey,
                 verified: prev[chatKey]?.verified ?? false,
                 fingerprint: fingerprint,
-                messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text, ts: frame.ts }],
+                messages: [...(prev[chatKey]?.messages ?? []), { sender: 'them', text: safeText, ts: frame.ts }],
             },
         }));
+        if (beepRef.current) {
+            void beepRef.current.play().catch(() => {});
+        }
         // Opcional: enviar receipt
         // wsRef.current?.send(JSON.stringify({ action: 'receipt', id: frame.id }));
     }
@@ -574,6 +590,13 @@ export default function App() {
     }
 
     async function sendMessage(peer: string, message: string) {
+        const trimmed = message.trim();
+        if (trimmed.length === 0) return;
+        if (trimmed.length > 255) {
+            appendLog('El mensaje supera el límite de 255 caracteres.');
+            return;
+        }
+
         let session = sessions[peer];
 
         // --- FIX CRITICO: Cargar del disco si no está en memoria ---
@@ -591,7 +614,7 @@ export default function App() {
             appendLog('No hay sesión o socket');
             return;
         }
-        const { header, ciphertextHex, serializedHeader } = await encryptMessage(session as any, message);
+        const { header, ciphertextHex, serializedHeader } = await encryptMessage(session as any, trimmed);
         persistSession(peer, session);
 
         let finalHeader = { ...serializedHeader, peer: username };
@@ -622,7 +645,7 @@ export default function App() {
             ...prev,
             [peer]: {
                 ...prev[peer],
-                messages: [...(prev[peer]?.messages ?? []), { sender: 'me', text: message, ts: frame.ts }],
+                messages: [...(prev[peer]?.messages ?? []), { sender: 'me', text: trimmed, ts: frame.ts }],
             },
         }));
     }
@@ -644,6 +667,11 @@ export default function App() {
     const isAuth = status === 'auth';
     const activeChatData = activeChat ? chats[activeChat] : null;
 
+    useEffect(() => {
+        if (!messagesRef.current) return;
+        messagesRef.current.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
+    }, [activeChat, activeChatData?.messages.length]);
+
     return (
         <div className="app-shell">
             <nav className="topbar">
@@ -658,7 +686,9 @@ export default function App() {
                     <section className="auth-hero">
                         <div>
                             <h1>Mensajería cifrada</h1>
-                            <p className="muted">Regístrate o inicia sesión para empezar. No mezclamos vistas.</p>
+                            <p className="label">Registro / Login</p>
+                            <p className="muted">Verificación de identidad y acceso seguro.</p>
+                            <p className="muted">Regístrate o inicia sesión para empezar.</p>
                             <div className="pill-row">
                                 {statusBlocks.map((b) => (
                                     <span key={b.label} className={`pill ${b.tone}`}>{b.label}: {b.value}</span>
@@ -675,28 +705,52 @@ export default function App() {
                     {authMode === 'login' ? (
                         <section className="auth-card">
                             <h2>Iniciar sesión</h2>
-                            <input placeholder="usuario" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} />
-                            <input placeholder="contraseña" type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} />
+                            <input
+                                placeholder="usuario"
+                                value={loginUser}
+                                maxLength={50}
+                                onChange={(e) => setLoginUser(e.target.value)}
+                            />
+                            <input
+                                placeholder="contraseña"
+                                type="password"
+                                value={loginPass}
+                                maxLength={64}
+                                minLength={5}
+                                onChange={(e) => setLoginPass(e.target.value)}
+                            />
                             <button
                                 disabled={!usernameIsValid(loginUser) || !passwordIsValid(loginPass)}
                                 onClick={handleLogin}
                             >
                                 Entrar
                             </button>
-                            <p className="helper-text">Contraseña mínima: 8 caracteres, letras y números.</p>
+                            <p className="helper-text">Usuario máximo 50 caracteres. Contraseña mínima: 5 caracteres, con mayúsculas, minúsculas, número y símbolo.</p>
                         </section>
                     ) : (
                         <section className="auth-card">
                             <h2>Crear cuenta</h2>
-                            <input placeholder="usuario nuevo" value={registerUser} onChange={(e) => setRegisterUser(e.target.value)} />
-                            <input placeholder="contraseña segura" type="password" value={registerPass} onChange={(e) => setRegisterPass(e.target.value)} />
+                            <input
+                                placeholder="usuario nuevo"
+                                value={registerUser}
+                                maxLength={50}
+                                onChange={(e) => setRegisterUser(e.target.value)}
+                            />
+                            <input
+                                placeholder="contraseña segura"
+                                type="password"
+                                value={registerPass}
+                                maxLength={64}
+                                minLength={5}
+                                onChange={(e) => setRegisterPass(e.target.value)}
+                            />
                             <button
                                 disabled={!usernameIsValid(registerUser) || !passwordIsValid(registerPass)}
                                 onClick={handleRegister}
                             >
                                 Registrar
                             </button>
-                            <p className="helper-text">Después de registrarte inicia sesión manualmente.</p>
+                            <p className="helper-text">Máximo 50 caracteres para usuario. Usa una contraseña robusta (5+ caracteres con mezcla de símbolos).</p>
                         </section>
                     )}
                 </main>
@@ -720,6 +774,7 @@ export default function App() {
                                 <input
                                     placeholder="usuario destino"
                                     value={peerToStart}
+                                    maxLength={50}
                                     onChange={(e) => setPeerToStart(e.target.value)}
                                 />
                                 <button onClick={fetchPeerBundle} disabled={!peerToStart || !token}>Obtener bundle</button>
@@ -778,7 +833,7 @@ export default function App() {
                                         </span>
                                     </div>
                                 </header>
-                                <div className="messages">
+                                <div className="messages" ref={messagesRef}>
                                     {activeChatData.messages.map((m, idx) => (
                                         <div key={idx} className={`msg ${m.sender} ${m.error ? 'error' : ''}`}>
                                             <div>
@@ -814,7 +869,12 @@ function ChatComposer({ onSend }: { onSend: (text: string) => void }) {
     const [text, setText] = useState('');
     return (
         <div className="composer">
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Mensaje..."/>
+            <input
+                value={text}
+                maxLength={255}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Mensaje (máx. 255 caracteres)"
+            />
             <button
                 onClick={() => {
                     if (text.trim().length === 0) return;
