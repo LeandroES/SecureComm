@@ -54,6 +54,11 @@ function passwordIsValid(value: string) {
     return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=.?,])[A-Za-z\d!@#$%^&*()_+\-=.?,]{5,64}$/.test(value);
 }
 
+function loginPasswordIsValid(value: string) {
+    // Permite intentar login con cualquier contraseña no vacía para alinearse con las reglas del backend
+    return value.trim().length > 0;
+}
+
 type Chat = {
     peer: string;
     messages: Array<{ sender: 'me' | 'them'; text: string; ts: string; error?: boolean }>;
@@ -342,8 +347,8 @@ export default function App() {
     }
 
     async function handleLogin() {
-        if (!usernameIsValid(loginUser) || !passwordIsValid(loginPass)) {
-            setAuthMessage('Credenciales inválidas: usuario (5-50) y contraseña de mínimo 5 caracteres con mayúscula, número y símbolo.');
+        if (!usernameIsValid(loginUser) || !loginPasswordIsValid(loginPass)) {
+            setAuthMessage('Ingresa usuario válido (5-50 caracteres) y una contraseña.');
             return;
         }
         try {
@@ -720,12 +725,12 @@ export default function App() {
                                 onChange={(e) => setLoginPass(e.target.value)}
                             />
                             <button
-                                disabled={!usernameIsValid(loginUser) || !passwordIsValid(loginPass)}
+                                disabled={!usernameIsValid(loginUser) || !loginPasswordIsValid(loginPass)}
                                 onClick={handleLogin}
                             >
                                 Entrar
                             </button>
-                            <p className="helper-text">Usuario máximo 50 caracteres. Contraseña mínima: 5 caracteres, con mayúsculas, minúsculas, número y símbolo.</p>
+                            <p className="helper-text">Usuario máximo 50 caracteres. La contraseña puede tener cualquier formato (se validará en el backend).</p>
                         </section>
                     ) : (
                         <section className="auth-card">
