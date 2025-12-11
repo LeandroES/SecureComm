@@ -352,12 +352,8 @@ export default function App() {
             return;
         }
         try {
-            const identity = loadIdentity();
-            if (!identity) {
-                appendLog('No hay identidad local. Registra primero.');
-                setAuthMessage('Registra tu identidad antes de iniciar sesión.');
-                return;
-            }
+            const identity = await ensureIdentity();
+            if (!identity) return;
             const rememberedDevice = localStorage.getItem('securecomm.device') || crypto.randomUUID();
             const res = await login({ username: loginUser, password: loginPass, device_id: rememberedDevice });
             setToken(res.access_token);
