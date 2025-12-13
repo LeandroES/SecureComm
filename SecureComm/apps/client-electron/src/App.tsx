@@ -11,6 +11,7 @@ import {
     initiatorSession,
     keyFingerprint,
     loadIdentity,
+    loadLocalKeys,
     loadSessionFromStorage,
     refreshPreKeys,
     saveSessionToStorage,
@@ -363,8 +364,13 @@ export default function App() {
             return;
         }
         try {
-            const identity = await ensureIdentity(loginUser);
-            if (!identity) return;
+            const identity = loadIdentity(loginUser);
+            const hasLocalKeys = loadLocalKeys(loginUser);
+            if (!identity || !hasLocalKeys) {
+                setAuthMessage('No se encontró la identidad local para este usuario. Usa el mismo dispositivo de registro o importa tu respaldo.');
+                appendLog('Login bloqueado: faltan llaves/identidad local');
+                return;
+            }
             const rememberedDevice = localStorage.getItem(deviceKey(loginUser))
                 || localStorage.getItem('securecomm.device')
                 || crypto.randomUUID();

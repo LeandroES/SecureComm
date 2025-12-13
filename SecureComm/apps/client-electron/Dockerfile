@@ -15,6 +15,8 @@ COPY package.json tsconfig.base.json ./
 COPY packages/crypto-sdk/package.json packages/crypto-sdk/
 COPY apps/client-electron/package.json apps/client-electron/
 
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+
 RUN npm install
 
 COPY packages/crypto-sdk packages/crypto-sdk
