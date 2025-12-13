@@ -553,7 +553,15 @@ export default function App() {
             }
 
         } catch (err) {
-            handleError(chatKey, err, frame);
+            await handleError(chatKey, err, frame);
+        } finally {
+            if (frame.id && wsRef.current?.readyState === WebSocket.OPEN) {
+                try {
+                    wsRef.current.send(JSON.stringify({ action: 'receipt', id: frame.id }));
+                } catch (sendErr) {
+                    appendLog(`No se pudo enviar receipt: ${sendErr}`);
+                }
+            }
         }
     }
 
