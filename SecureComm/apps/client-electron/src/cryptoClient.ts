@@ -48,6 +48,14 @@ export async function initCrypto() {
     await sodium.ready;
 }
 
+function identityKey(username?: string) {
+    return username ? `securecomm.identity.${username}` : 'securecomm.identity';
+}
+
+function localKeysKey(username?: string) {
+    return username ? `securecomm.keys.${username}` : 'securecomm.keys';
+}
+
 export function toBase64(data: Uint8Array): string {
     // FIX: Usar URLSAFE_NO_PADDING para coincidir con el nuevo estándar del SDK
     return sodium.to_base64(data, sodium.base64_variants.URLSAFE_NO_PADDING);
@@ -60,17 +68,19 @@ export function fromBase64(data: string): Uint8Array {
 }
 
 // --- Identity Management ---
-export function storeIdentity(id: Identity) {
+export function storeIdentity(id: Identity, username?: string) {
     const payload: StoredIdentity = {
         ikEd25519: toBase64(id.ikEd25519.publicKey),
         ikX25519: toBase64(id.ikX25519.publicKey),
         ikSecret: toBase64(id.ikEd25519.privateKey),
     };
-    localStorage.setItem('securecomm.identity', JSON.stringify(payload));
+    localStorage.setItem(identityKey(username), JSON.stringify(payload));
 }
 
-export function loadIdentity(): Identity | null {
-    const raw = localStorage.getItem('securecomm.identity');
+export function loadIdentity(username?: string): Identity | null {
+    const raw = localStorage.getItem(identityKey(username))
+        // Compatibilidad hacia atrás: permitir la clave antigua si no hay una por usuario
+        || (username ? localStorage.getItem(identityKey()) : null);
     if (!raw) return null;
     try {
         const parsed = JSON.parse(raw) as StoredIdentity;
@@ -90,20 +100,20 @@ export function loadIdentity(): Identity | null {
     }
 }
 
-export async function createIdentity(seed?: Uint8Array) {
+export async function createIdentity(seed?: Uint8Array, username?: string) {
     await sodium.ready;
     const id = await bootstrapIdentity(seed);
-    storeIdentity(id);
+    storeIdentity(id, username);
 
     // FIX: Devolver la identidad recargada desde el storage.
     // Esto asegura que las llaves pasen por el "lavado" de fromBase64
     // y sean 100% compatibles con los tests y el resto de la app.
-    return loadIdentity()!;
+    return loadIdentity(username)!;
 }
 
 // --- Local Key Management ---
 
-export function storeLocalKeys(spk: SignedPreKey, otks: OneTimePreKey[]) {
+export function storeLocalKeys(spk: SignedPreKey, otks: OneTimePreKey[], username?: string) {
     const payload: StoredKeys = {
         spk: {
             id: spk.id,
@@ -121,11 +131,12 @@ export function storeLocalKeys(spk: SignedPreKey, otks: OneTimePreKey[]) {
             }
         }))
     };
-    localStorage.setItem('securecomm.keys', JSON.stringify(payload));
+    localStorage.setItem(localKeysKey(username), JSON.stringify(payload));
 }
 
-export function loadLocalKeys(): { spk: SignedPreKey, otks: OneTimePreKey[] } | null {
-    const raw = localStorage.getItem('securecomm.keys');
+export function loadLocalKeys(username?: string): { spk: SignedPreKey, otks: OneTimePreKey[] } | null {
+    const raw = localStorage.getItem(localKeysKey(username))
+        || (username ? localStorage.getItem(localKeysKey()) : null);
     if (!raw) return null;
     try {
         const parsed = JSON.parse(raw) as StoredKeys;
@@ -152,18 +163,18 @@ export function loadLocalKeys(): { spk: SignedPreKey, otks: OneTimePreKey[] } | 
     }
 }
 
-export async function generateBundle(identity: Identity, otkCount = 5) {
+export async function generateBundle(identity: Identity, otkCount = 5, username?: string) {
     const spk = await generateSignedPreKey(identity);
     const otks = await generateOneTimePreKeys(otkCount);
-    storeLocalKeys(spk, otks);
+    storeLocalKeys(spk, otks, username);
     const bundle = await exportBundle(identity, spk, otks[0]);
     return { spk, otks, bundle };
 }
 
-export async function refreshPreKeys(identity: Identity, otkCount = 5) {
+export async function refreshPreKeys(identity: Identity, otkCount = 5, username?: string) {
     const spk = await rotateSignedPreKey(identity);
     const otks = await replenishOneTimePreKeys(otkCount);
-    storeLocalKeys(spk, otks);
+    storeLocalKeys(spk, otks, username);
     return { spk, otks };
 }
 
@@ -181,11 +192,13 @@ export async function autoResponderSession(
         ikEd25519: Uint8Array;
         ephPubKey: Uint8Array;
         oneTimePreKey?: Uint8Array;
-    }
+    },
+    username?: string
 ) {
     // FIX: Cargar las llaves PRIVADAS del almacenamiento local
     // (Antes fallaba porque intentábamos usar la llave pública del mensaje)
-    const storedKeysJson = localStorage.getItem('securecomm.keys');
+    const storedKeysJson = localStorage.getItem(localKeysKey(username))
+        || (username ? localStorage.getItem(localKeysKey()) : null);
     if (!storedKeysJson) {
         throw new Error("No se encontraron llaves privadas (securecomm.keys) para descifrar el handshake.");
     }

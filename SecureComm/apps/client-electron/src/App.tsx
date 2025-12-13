@@ -33,6 +33,10 @@ const DEFAULT_OTKS = 5;
 const CHAT_PREFIX = 'securecomm.chats.';
 const TOKEN_KEY = 'securecomm.token';
 
+function deviceKey(owner?: string) {
+    return owner ? `securecomm.device.${owner}` : 'securecomm.device';
+}
+
 function chatsKey(owner: string) {
     return `${CHAT_PREFIX}${owner || 'anon'}`;
 }
@@ -282,6 +286,12 @@ export default function App() {
         sessionsHydratedRef.current = false;
         setActiveChat(null);
         setLog([]);
+        setUsername('');
+        setLoginUser('');
+        setDeviceId('');
+        setPendingBundle(null);
+        localStorage.removeItem('securecomm.username');
+        localStorage.removeItem(deviceKey());
         appendLog(message);
     }
 
@@ -295,19 +305,19 @@ export default function App() {
 
     const qrPayload = useMemo(() => {
         if (status !== 'ready' && status !== 'auth') return '';
-        const identity = loadIdentity() as any;
+        const identity = loadIdentity(username || undefined) as any;
         if (!identity) return '';
         return JSON.stringify({ ik: toBase64(identity.ikEd25519.publicKey) });
-    }, [status]);
+    }, [status, username]);
 
     const qrData = useQRCode(qrPayload);
 
     // --- ACTIONS ---
 
-    async function ensureIdentity() {
-        const existing = loadIdentity();
+    async function ensureIdentity(targetUser?: string) {
+        const existing = loadIdentity(targetUser);
         if (existing) return existing;
-        const id = await createIdentity();
+        const id = await createIdentity(undefined, targetUser);
         appendLog('Nueva identidad generada');
         return id;
     }
@@ -318,8 +328,8 @@ export default function App() {
             return;
         }
         try {
-            const identity = await ensureIdentity() as any;
-            const { spk, otks } = await generateBundle(identity, DEFAULT_OTKS);
+            const identity = await ensureIdentity(registerUser) as any;
+            const { spk, otks } = await generateBundle(identity, DEFAULT_OTKS, registerUser);
             const newDeviceId = crypto.randomUUID();
 
             const payload = {
@@ -334,6 +344,7 @@ export default function App() {
             };
             await register(payload);
             setDeviceId(newDeviceId);
+            localStorage.setItem(deviceKey(registerUser), newDeviceId);
             localStorage.setItem('securecomm.device', newDeviceId);
             localStorage.setItem('securecomm.username', registerUser);
             setLoginUser(registerUser);
@@ -352,15 +363,18 @@ export default function App() {
             return;
         }
         try {
-            const identity = await ensureIdentity();
+            const identity = await ensureIdentity(loginUser);
             if (!identity) return;
-            const rememberedDevice = localStorage.getItem('securecomm.device') || crypto.randomUUID();
+            const rememberedDevice = localStorage.getItem(deviceKey(loginUser))
+                || localStorage.getItem('securecomm.device')
+                || crypto.randomUUID();
             const res = await login({ username: loginUser, password: loginPass, device_id: rememberedDevice });
             setToken(res.access_token);
             localStorage.setItem(TOKEN_KEY, res.access_token);
             setStatus('auth');
             setUsername(loginUser);
             setDeviceId(rememberedDevice);
+            localStorage.setItem(deviceKey(loginUser), rememberedDevice);
             localStorage.setItem('securecomm.device', rememberedDevice);
             localStorage.setItem('securecomm.username', loginUser);
             setAuthMessage('Login correcto.');
@@ -394,7 +408,7 @@ export default function App() {
 
     async function startSessionWithPending() {
         if (!pendingBundle) return;
-        const identity = loadIdentity();
+        const identity = loadIdentity(username || undefined);
         if (!identity) return;
         try {
             const bundle: BundleResponse = pendingBundle.bundle;
@@ -435,9 +449,9 @@ export default function App() {
     }
 
     async function rotatePreKeysFlow() {
-        const identity = loadIdentity();
+        const identity = loadIdentity(username || undefined);
         if (!identity || !deviceId || !token) return;
-        const { spk, otks } = await refreshPreKeys(identity, DEFAULT_OTKS);
+        const { spk, otks } = await refreshPreKeys(identity, DEFAULT_OTKS, username);
         await rotatePreKeys(deviceId, token, {
             spk_pub: toBase64(spk.keyPair.publicKey),
             spk_sig: toBase64(spk.signature),
@@ -487,7 +501,7 @@ export default function App() {
             if (!headerAny.x3dh) return null;
 
             appendLog(`Detectado handshake X3DH de ${chatKey}. Estableciendo sesión...`);
-            const identity = loadIdentity();
+            const identity = loadIdentity(username || undefined);
             if (!identity) throw new Error("Sin identidad local");
 
             const senderBundle = await fetchBundle(chatKey, token);
@@ -502,7 +516,7 @@ export default function App() {
                 ikEd25519: senderIkEd,
                 ephPubKey: ephKey,
                 oneTimePreKey: usedOtk
-            });
+            }, username);
             return newSession;
         };
 
