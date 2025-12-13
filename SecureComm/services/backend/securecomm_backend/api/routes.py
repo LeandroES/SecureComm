@@ -90,6 +90,10 @@ async def login(
     device = None
     if payload.device_id:
         device = await session.get(Device, UUID(payload.device_id))
+        # Si el device_id pertenece a otro usuario, ignoramos el valor recordado
+        # y generamos un nuevo dispositivo para evitar sesiones mezcladas.
+        if device and device.user_id != user.id:
+            device = None
     if device is None:
         device = Device(user=user, ik_pub=user.ik_pub, sig_pub=user.sig_pub)
         session.add(device)

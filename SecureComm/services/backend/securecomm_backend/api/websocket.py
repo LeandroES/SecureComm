@@ -37,9 +37,11 @@ async def _queue_pending(redis: Redis, user_id: str, envelope_id: str) -> None:
 
 
 async def _pull_pending(redis: Redis, user_id: str) -> list[str]:
-    envelopes = await redis.lrange(f"pending:{user_id}", 0, -1)
-    await redis.delete(f"pending:{user_id}")
-    return envelopes
+    return await redis.lrange(f"pending:{user_id}", 0, -1)
+
+
+async def _ack_pending(redis: Redis, user_id: str, envelope_id: str) -> None:
+    await redis.lrem(f"pending:{user_id}", 0, envelope_id)
 
 
 async def messaging_socket(
@@ -80,8 +82,6 @@ async def messaging_socket(
                     "ts": env.ts.isoformat(),
                 }
             )
-            env.delivered = True
-        await session.commit()
 
     try:
         while True:
@@ -133,6 +133,7 @@ async def messaging_socket(
                     if record:
                         record.delivered = True
                         await session.commit()
+                        await _ack_pending(redis, user_id, env_id)
                 await websocket.send_json({"status": "ack"})
             elif action == "close":
                 # Cierre ordenado solicitado por el cliente
